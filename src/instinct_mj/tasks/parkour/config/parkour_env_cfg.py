@@ -227,7 +227,7 @@ ROUGH_TERRAINS_CFG = FiledTerrainGeneratorCfg(
         ),
         "mesh_boxes": PerlinMeshRandomMultiBoxTerrainCfg(
             proportion=0.10,
-            box_height_mean=[0.1, 0.4],
+            box_height_mean=(0.1, 0.4),
             box_height_range=0.05,
             box_length_mean=0.4,
             box_length_range=0.1,

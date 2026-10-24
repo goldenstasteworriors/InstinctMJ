@@ -61,15 +61,16 @@ def build_heightmap(mj_model: mujoco.MjModel, resolution: float, terrain_body: s
 
 
 def load_or_build_heightmap(
-    mj_model: mujoco.MjModel, metadata_yaml: str, resolution: float, cache_dir: str
+    mj_model: mujoco.MjModel, metadata_yaml: str | None, resolution: float, cache_dir: str
 ) -> tuple[np.ndarray, float, float]:
-    """Cache key: terrain geoms of the compiled model + the metadata yaml + resolution."""
+    """Cache key: terrain geoms of the compiled model + the metadata yaml (if any) + resolution."""
     terrain_id = mj_model.body("terrain").id
     is_terrain = mj_model.geom_bodyid == terrain_id
     key = hashlib.sha1()
     key.update(f"v{HEIGHTMAP_CACHE_VERSION}".encode())
-    with open(os.path.expanduser(metadata_yaml), "rb") as f:
-        key.update(f.read())
+    if metadata_yaml is not None:
+        with open(os.path.expanduser(metadata_yaml), "rb") as f:
+            key.update(f.read())
     key.update(str(resolution).encode())
     for arr in (mj_model.geom_pos, mj_model.geom_quat, mj_model.geom_size, mj_model.geom_type, mj_model.geom_dataid,
                 mj_model.geom_group, mj_model.geom_contype, mj_model.geom_conaffinity):  # fmt: skip

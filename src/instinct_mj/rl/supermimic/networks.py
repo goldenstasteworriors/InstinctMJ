@@ -162,17 +162,17 @@ class WorldModel(nn.Module):
 
 
 class LatentDecoder(nn.Module):
-    """Training-only decoder of the visual latent to the CLEAN processed depth image (1 x 18 x 32): the reconstruction loss
-    is the only training signal of the policy's depth encoder (no collapse of the latent prediction loss). Never used in
-    imagination."""
+    """Training-only decoder of the visual latent to the CLEAN processed depth image (``channels`` x 18 x 32, e.g. a stack
+    of frames): the reconstruction loss is the only training signal of the policy's depth encoder (no collapse of the
+    latent prediction loss). Never used in imagination."""
 
-    def __init__(self, latent_dim: int):
+    def __init__(self, latent_dim: int, channels: int = 1):
         super().__init__()
         self.fc = nn.Sequential(nn.Linear(latent_dim, 32 * 5 * 8), nn.ELU())
         self.dec = nn.Sequential(
             nn.ConvTranspose2d(32, 32, 3, 2, 1, output_padding=(0, 1)), nn.ELU(),  # -> (9, 16)
             nn.ConvTranspose2d(32, 16, 3, 2, 1, output_padding=(1, 1)), nn.ELU(),  # -> (18, 32)
-            nn.Conv2d(16, 1, 3, 1, 1),
+            nn.Conv2d(16, channels, 3, 1, 1),
         )  # fmt: skip
 
     def forward(self, z):

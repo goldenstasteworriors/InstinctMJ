@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 
 from instinct_mj.rl import (
@@ -10,6 +12,7 @@ from instinct_mj.rl import (
     InstinctRlOnPolicyRunnerCfg,
     InstinctRlPpoAlgorithmCfg,
 )
+from instinct_mj.rl.supermimic.parkour.config import ParkourSuperMimicRunnerCfg
 
 
 @dataclass(kw_only=True)
@@ -98,3 +101,27 @@ class G1ParkourPPORunnerCfg(InstinctRlOnPolicyRunnerCfg):
 
 def g1_parkour_amp_instinct_rl_cfg() -> G1ParkourPPORunnerCfg:
     return G1ParkourPPORunnerCfg()
+
+
+@dataclass(kw_only=True)
+class G1ParkourSuperMimicRunnerCfg(InstinctRlOnPolicyRunnerCfg, ParkourSuperMimicRunnerCfg):
+    """Agent cfg of the parkour task trained with SuperMimic (``ParkourSuperMimicRunner``): the task's policy (the same
+    MoE actor and depth encoder as the PPO task) plus the SuperMimic and style-reward hyperparameters (flat,
+    ``--agent.<field>``). There is no PPO algorithm and no observation normalization (as in the PPO task)."""
+
+    policy: object = field(default_factory=lambda: MoEPolicyCfg())
+    algorithm: None = None
+    num_steps_per_env: None = None
+    max_iterations: int = 320_000
+    save_interval: int = 2000
+    log_interval: int = 50
+    experiment_name: str = "g1_parkour_supermimic"
+    load_run: str | None = None
+
+    def __post_init__(self):
+        self.resume = self.load_run is not None
+        self.run_name = "supermimic" + (f"_GPU{os.environ.get('CUDA_VISIBLE_DEVICES')}" if "CUDA_VISIBLE_DEVICES" in os.environ else "")
+
+
+def g1_parkour_supermimic_instinct_rl_cfg() -> G1ParkourSuperMimicRunnerCfg:
+    return G1ParkourSuperMimicRunnerCfg()

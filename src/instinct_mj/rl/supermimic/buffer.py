@@ -16,13 +16,19 @@ from .mdp import DEPTH_SHAPE, NUM_J, STATE_DIM
 
 
 class ReplayBuffer:
-    def __init__(self, T: int, N: int, num_contact: int, device: str, holdout_envs: float = 0.0):
+    # fields returned by ``sample_windows`` / ``starts_at`` (start state and its observation history)
+    window_keys = ("s", "s1", "a", "contact", "done", "depth", "depth1", "depth1_clean", "terminated", "f1", "phase1", "origin1")
+    start_keys = ("s", "a_prev", "f", "phase", "origin", "depth")
+    hist_keys = ("s", "a_prev")
+
+    def __init__(self, T: int, N: int, num_contact: int, device: str, holdout_envs: float = 0.0, fields: dict | None = None):
         """``holdout_envs``: fraction of the envs (the last ones) that is never sampled for training (``train_envs``) and
-        only used for held-out diagnostics (``holdout_envs`` range)."""
+        only used for held-out diagnostics (``holdout_envs`` range). ``fields``: {name: (shape, dtype)} of a transition
+        (default: the perceptive shadowing fields below); a task with other fields also sets the ``*_keys`` above."""
         self.T, self.N, self.device = T, N, device
         n_hold = int(N * holdout_envs)
         self.train_envs, self.holdout_envs = (0, N - n_hold), ((N - n_hold, N) if n_hold > 0 else (0, N))
-        fields = {
+        fields = fields if fields is not None else {
             "s": (STATE_DIM, torch.float32),
             "s1": (STATE_DIM, torch.float32),
             "a": (NUM_J, torch.float32),
@@ -93,8 +99,7 @@ class ReplayBuffer:
         ages = t0.unsqueeze(-1) + torch.arange(k, device=self.device)
         rows = self._row(ages)
         e = env.unsqueeze(-1).expand_as(rows)
-        keys = ("s", "s1", "a", "contact", "done", "depth", "depth1", "depth1_clean", "terminated", "f1", "phase1", "origin1")
-        out = {key: self.data[key][rows, e] for key in keys}
+        out = {key: self.data[key][rows, e] for key in self.window_keys}
         # transition j is valid if no episode ended at transitions 0..j-1 (the done transition itself is valid)
         d = out["done"].float()
         out["mask"] = torch.cumprod(torch.cat((torch.ones(B, 1, device=self.device), 1 - d[:, :-1]), -1), -1)
@@ -102,11 +107,14 @@ class ReplayBuffer:
         out["weight"] = weight
         return out
 
-    def eligible_starts(self, ok_fn, env_range: tuple[int, int] | None = None, max_age: int | None = None) -> torch.Tensor:
-        """(M, 2) ``(age, env)`` pairs of all buffered states for which ``ok_fn(f)`` (global frame index) holds."""
+    def eligible_starts(
+        self, ok_fn, env_range: tuple[int, int] | None = None, max_age: int | None = None, key: str = "f"
+    ) -> torch.Tensor:
+        """(M, 2) ``(age, env)`` pairs of all buffered states for which ``ok_fn(data[key])`` holds (default: the global
+        reference frame index)."""
         lo, hi = env_range if env_range is not None else (0, self.N)
         rows = self._row(torch.arange(self.size if max_age is None else max_age + 1, device=self.device))
-        ok = ok_fn(self.data["f"][rows][:, lo:hi])  # (n_age, n_env)
+        ok = ok_fn(self.data[key][rows][:, lo:hi])  # (n_age, n_env)
         idx = ok.nonzero(as_tuple=False)
         idx[:, 1] += lo
         return idx
@@ -120,8 +128,8 @@ class ReplayBuffer:
         back = torch.minimum(back, age.unsqueeze(-1))  # stay inside the buffer
         hrows = self._row(age.unsqueeze(-1) - back)
         henv = env.unsqueeze(-1).expand_as(hrows)
-        start = {k: self.data[k][row, env] for k in ("s", "a_prev", "f", "phase", "origin", "depth")}
-        hist_d = {k: self.data[k][hrows, henv] for k in ("s", "a_prev")}
+        start = {k: self.data[k][row, env] for k in self.start_keys}
+        hist_d = {k: self.data[k][hrows, henv] for k in self.hist_keys}
         # slots with the same ``back`` are the same (backfilled) observation
         hist_d["slot"] = (back.unsqueeze(2) == back.unsqueeze(1)).float().argmax(-1)
         start["env"], hist_d["env"] = env, env
