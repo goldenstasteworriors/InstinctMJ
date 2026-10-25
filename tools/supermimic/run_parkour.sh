@@ -15,3 +15,7 @@ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 python -u -m instinct_mj.supermimic.train \
   --data "$INSTINCT_SM_DATA/parkour_amp" --log-dir "$RUN_DIR" "$@" \
   > >(tee "$RUN_DIR/stdout.log") 2>&1
+CHECKPOINT=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["checkpoint"])' "$RUN_DIR/last.json")
+python -u -m instinct_mj.supermimic.evaluate --checkpoint "$CHECKPOINT" \
+  --output "$RUN_DIR/final_eval.json" --num-envs 128 --steps "${INSTINCT_SM_EVAL_STEPS:-1000}" \
+  > >(tee "$RUN_DIR/eval.log") 2>&1
