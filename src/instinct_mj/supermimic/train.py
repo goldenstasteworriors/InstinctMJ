@@ -53,7 +53,7 @@ def state_from_env(env: InstinctRlEnv, obs: dict) -> torch.Tensor:
   force = torch.log1p(contact.norm(dim=-1).clamp_max(1e5))
   goal = torch.cat((env.command_manager.get_command("base_velocity"), depth), -1)
   privileged = torch.cat((robot.root_link_lin_vel_b, robot.root_link_pos_w - env.scene.env_origins,
-    force.flatten(1), robot.applied_torque), -1)
+    force.flatten(1), robot.qfrc_actuator), -1)
   state = torch.cat((proprio, goal, privileged), -1).float()
   if not torch.isfinite(state).all():
     raise FloatingPointError("Nonfinite simulator state/depth/contact")
