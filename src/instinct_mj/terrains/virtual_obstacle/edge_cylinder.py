@@ -553,7 +553,15 @@ class GreedyconcatEdgeCylinder(EdgeCylinder):
         max_passes = max(int(self.cfg.merge_collinear_max_passes), 1)
         active_segments = [seg.astype(np.float64, copy=False) for seg in segments]
         for _ in range(max_passes):
-            used = [False] * len(active_segments)
+            used = np.zeros(len(active_segments), dtype=bool)
+            # A successful merge requires projected gap <= gap_threshold and
+            # line distance <= line_distance_threshold. Expanded axis-aligned
+            # bounds therefore conservatively contain every possible match.
+            # Keep original index order, including when a merge extends bounds.
+            candidate_array = np.asarray(active_segments, dtype=np.float32).reshape(-1, 2, 3)
+            candidate_min = candidate_array.min(axis=1)
+            candidate_max = candidate_array.max(axis=1)
+            reach = gap_threshold + line_distance_threshold + 1.0e-5
             merged_segments: list[np.ndarray] = []
             changed = False
             for i, base_seg in enumerate(active_segments):
@@ -565,22 +573,37 @@ class GreedyconcatEdgeCylinder(EdgeCylinder):
                 keep_merging = True
                 while keep_merging:
                     keep_merging = False
-                    for j, candidate in enumerate(active_segments):
-                        if used[j]:
-                            continue
-                        merged = self._try_merge_collinear_pair(
-                            current_seg,
-                            candidate.astype(np.float32, copy=False),
-                            cos_threshold=cos_threshold,
-                            gap_threshold=gap_threshold,
-                            line_distance_threshold=line_distance_threshold,
+                    next_index = 0
+                    while next_index < len(active_segments):
+                        endpoints = current_seg.reshape(2, 3)
+                        eligible = np.flatnonzero(
+                            ~used
+                            & np.all(candidate_max >= endpoints.min(axis=0) - reach, axis=1)
+                            & np.all(candidate_min <= endpoints.max(axis=0) + reach, axis=1)
                         )
-                        if merged is None:
-                            continue
-                        current_seg = merged
-                        used[j] = True
-                        changed = True
-                        keep_merging = True
+                        eligible = eligible[eligible >= next_index]
+                        if eligible.size == 0:
+                            break
+                        for j in eligible:
+                            next_index = int(j) + 1
+                            merged = self._try_merge_collinear_pair(
+                                current_seg,
+                                active_segments[j].astype(np.float32, copy=False),
+                                cos_threshold=cos_threshold,
+                                gap_threshold=gap_threshold,
+                                line_distance_threshold=line_distance_threshold,
+                            )
+                            if merged is None:
+                                continue
+                            current_seg = merged
+                            used[j] = True
+                            changed = True
+                            keep_merging = True
+                            # Recompute the conservative candidate set after
+                            # extension, then continue in the same index order.
+                            break
+                        else:
+                            break
                 merged_segments.append(current_seg.astype(np.float64, copy=False))
 
             active_segments = merged_segments

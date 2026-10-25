@@ -17,10 +17,6 @@ def make_config(data: str, envs: int, rows: int, cols: int, seed: int):
   cfg.scene.terrain.terrain_generator.num_cols = cols
   cfg.scene.terrain.max_init_terrain_level = min(5, rows - 1)
   cfg.scene.terrain.terrain_generator.seed = seed
-  # Native Warp ray casting accelerates mesh-to-heightfield preprocessing;
-  # terrain resolution and collision geometry remain unchanged.
-  cfg.scene.terrain.terrain_generator.hfield_raycast_backend = "gpu"
-  cfg.scene.terrain.terrain_generator.hfield_gpu_device = "cuda:0"
   sensors = list(cfg.scene.sensors)
   for sensor in sensors:
     if sensor.name == "motion_reference":
