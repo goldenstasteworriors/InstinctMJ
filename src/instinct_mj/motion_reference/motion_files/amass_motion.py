@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import io
 import os
 import pickle as pkl
 from collections.abc import Sequence
@@ -557,7 +558,10 @@ class AmassMotion(MotionBuffer):
         return self._build_motion_sequence_from_smpl(poses, root_trans, framerate)
 
     def _read_retargetted_motion_file(self, filepath: str) -> MotionSequence:
-        raw_data = np.load(filepath, mmap_mode="r", allow_pickle=True)
+        # NPZ members cannot be memory-mapped. Buffer the compressed file once
+        # to avoid repeated remote-filesystem seeks for every named array.
+        with open(filepath, "rb") as source:
+            raw_data = np.load(io.BytesIO(source.read()), allow_pickle=True)
         framerate = raw_data["framerate"].item()
         joint_names = (
             raw_data["joint_names"] if isinstance(raw_data["joint_names"], list) else raw_data["joint_names"].tolist()
