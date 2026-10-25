@@ -226,7 +226,7 @@ def main() -> None:
       action = (pi(history[:, :, :PROPRIO_DIM], state[:, PROPRIO_DIM:PROPRIO_DIM + GOAL_DIM])
                 + 0.1 * torch.randn(args.num_envs, 29, device=device)).clamp(-20, 20)
       amp_actor, amp_ref = flatten_amp(obs["amp_policy"]), flatten_amp(obs["amp_reference"])
-      next_obs, reward, terminated, truncated, extras = env.step(action)
+      next_obs, reward, terminated, truncated, _extras = env.step(action)
       next_state = state_from_env(env, next_obs)
       done = terminated | truncated
       term_values = torch.stack([env.reward_manager._termwise_reward_buf["rewards"][name]
@@ -242,8 +242,8 @@ def main() -> None:
         wm.delta_norm.update(next_state[valid] - state[valid])
       wm.reward_norm.update(term_values)
       disc_norm.update(torch.cat((amp_actor, amp_ref)))
-      ep_ret += r
-      ep_len += 1
+      ep_ret.add_(r)
+      ep_len.add_(1)
       if done.any():
         completed_returns.extend(ep_ret[done].tolist())
         completed_lengths.extend((ep_len[done] * env.step_dt).tolist())

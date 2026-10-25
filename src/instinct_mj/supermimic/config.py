@@ -6,7 +6,9 @@ from pathlib import Path
 
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 
-from instinct_mj.tasks.parkour.config.g1.g1_parkour_target_amp_cfg import instinct_g1_parkour_amp_env_cfg
+from instinct_mj.tasks.parkour.config.g1.g1_parkour_target_amp_cfg import (
+  instinct_g1_parkour_amp_env_cfg,
+)
 
 
 def make_config(data: str, envs: int, rows: int, cols: int, seed: int):
