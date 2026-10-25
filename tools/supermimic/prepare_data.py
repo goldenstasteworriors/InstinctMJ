@@ -9,6 +9,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import mujoco
 import yaml
 
 
@@ -39,17 +40,41 @@ def main() -> None:
       shutil.copyfile(source, destination)
     selected.append(str(relative))
     receipt.append({"file": str(relative), "source": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()})
+  # The native robot is rooted at torso_link, while LAFAN CSVs are pelvis-rooted.
+  # Follow GMR_to_instinct.py: reverse all three waist coordinates, then solve
+  # world_T_torso = world_T_pelvis @ inverse(torso_T_pelvis) by native FK.
+  model_path = Path(__file__).resolve().parents[2] / "src/instinct_mj/assets/resources/unitree_g1/xml/g1_29dof_torsobase_popsicle.xml"
+  model = mujoco.MjModel.from_xml_path(str(model_path))
+  simdata = mujoco.MjData(model)
+  addresses = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n)] for n in names]
+  pelvis = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+  waist_indices = [names.index("waist_" + axis + "_joint") for axis in ("yaw", "roll", "pitch")]
   for source in sorted(args.lafan.glob("*.csv")):
     # Include locomotion as well as jumps/fall recovery; original AMP data is not publicly bundled.
-    relative = Path("lafan") / (source.stem + "-retargeted.npz")
+    relative = Path("lafan_torsobase") / (source.stem + "-retargeted.npz")
     destination = args.output / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
     data = np.loadtxt(source, delimiter=",")
     if data.ndim != 2 or data.shape[1] != 36 or not np.isfinite(data).all():
       raise ValueError(f"Invalid G1 CSV: {source}: {data.shape}")
     if not destination.exists():
+      joints = data[:, 7:].copy()
+      joints[:, waist_indices] *= -1
+      positions, quaternions = np.empty((len(data), 3)), np.empty((len(data), 4))
+      for frame in range(len(data)):
+        simdata.qpos[:] = 0
+        simdata.qpos[3] = 1
+        simdata.qpos[addresses] = joints[frame]
+        mujoco.mj_kinematics(model, simdata)
+        inverse_quat = simdata.xquat[pelvis].copy()
+        inverse_quat[1:] *= -1
+        mujoco.mju_mulQuat(quaternions[frame], data[frame, [6, 3, 4, 5]], inverse_quat)
+        offset = np.empty(3)
+        mujoco.mju_rotVecQuat(offset, simdata.xpos[pelvis], quaternions[frame])
+        positions[frame] = data[frame, :3] - offset
+      np.testing.assert_allclose(np.linalg.norm(quaternions, axis=-1), 1, atol=2e-5)
       np.savez_compressed(destination, framerate=30.0, joint_names=np.array(names),
-                          joint_pos=data[:, 7:], base_pos_w=data[:, :3], base_quat_w=data[:, [6, 3, 4, 5]])
+                          joint_pos=joints, base_pos_w=positions, base_quat_w=quaternions)
     selected.append(str(relative))
     receipt.append({"file": str(relative), "source": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()})
   if not selected:
