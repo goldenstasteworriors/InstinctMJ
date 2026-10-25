@@ -16,6 +16,9 @@ One RTX 3090, 1024 environments: **97% success** on the 10 motions of the releas
 step, jump-sit, roll vault) after 8000 iterations (3.2 h). Method, results and configuration:
 [src/instinct_mj/rl/supermimic/README.md](src/instinct_mj/rl/supermimic/README.md).
 
+The same method also trains the goal-reaching parkour policy (`Instinct-Parkour-Target-Amp-SuperMimic-G1-*`: depth camera,
+target point, AMP style reward): terrain curriculum level about 6 (of 0–9), and about 90% of the 20 s episodes end without a fall after 8.4 h.
+
 ## Installation
 
 ```bash
@@ -49,6 +52,16 @@ uv run instinct-play Instinct-Perceptive-Shadowing-G1-Play-v0 --checkpoint-file 
 ```
 
 Runs are written to `logs/instinct_rl/g1_perceptive_shadowing/`.
+
+Parkour (motion reference for the style reward in `~/Xyk/Datasets/data&model/parkour_motion_reference`, see
+`src/instinct_mj/tasks/parkour/README.md`); `instinct-train` cannot parse the parkour env cfg, so use the launcher:
+
+```bash
+uv run python -m instinct_mj.scripts.supermimic.train_parkour --num-envs 1024 --agent.max-iterations 40000
+uv run python webplay_parkour_supermimic.py <run>/model_<it>.pt
+```
+
+Runs are written to `logs/instinct_rl/g1_parkour_supermimic/`.
 
 ## Acknowledgements
 

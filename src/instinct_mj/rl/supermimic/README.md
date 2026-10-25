@@ -121,7 +121,9 @@ remaining time is the simulator step (sensors, camera noise, managers).
 | `kinematics.py`, `rotations.py` | Differentiable forward kinematics, rotation utilities |
 | `terrain.py` | Terrain heightmap (ray-cast once, cached) and height scan |
 | `buffer.py`, `sim.py`, `motion_lib.py`, `depth.py` | Replay buffer, env readers, reference motions, clean depth images |
-| `scripts/supermimic/evaluate.py` | Evaluation entry point |
+| `style.py` | `StyleReward`: adversarial style reward (AMP / WASABI discriminator), differentiable w.r.t. the states |
+| `parkour/` | Parkour task: analytic heads (`mdp.py`), sim reader, runner and config |
+| `scripts/supermimic/evaluate.py`, `train_parkour.py` | Evaluation entry point; parkour training launcher |
 | `tests/supermimic/` | Analytic-head checks against the env, compile parity, Play loading, failure diagnosis, benchmarks |
 
 ## Known limitations
@@ -143,6 +145,25 @@ remaining time is the simulator step (sensors, camera noise, managers).
 | Outputs | State increments | Adds contact logits, the latent increment and a failure head |
 | Policy | MLP encoder / decoder | The task's own depth policy network |
 | Reset sampling | Return-based bins | The task's adaptive motion bins |
+
+## Parkour task
+
+`Instinct-Parkour-Target-Amp-SuperMimic-G1-v0` trains the policy of the goal-reaching parkour task (`Instinct-Parkour-Target-Amp-G1-v0`,
+whose PPO version is unchanged) with the same method; the code is in `parkour/`.
+
+- **Task heads** (`parkour/mdp.py`): the velocity command recomputed from the target point at every imagined state, the policy and
+  `amp_policy` observations in the env's format, the 25 reward terms, the terminations and the critic features, checked against
+  the env term by term by `tests/supermimic/check_parkour_heads.py`. Contact terms use the predicted contacts of the feet, the
+  torso and 38 other bodies; the feet air / contact timers are carried through the imagination. Approximations: `dof_acc_l2`
+  (finite difference instead of the last substep's acceleration) and the feet timers (per step instead of per substep).
+- **World model**: the root is `torso_link`; the context is the per-joint actuation lag of the episode, the friction and the
+  previous action; z is the latent of the policy's encoder of the 8-frame depth stack (buffered as uint8).
+- **Style reward** (`style.py`, task agnostic): the WASABI discriminator of the PPO task (same network, losses and reward),
+  trained on real windows only (policy windows rebuilt from buffered states, the env's `amp_reference` windows); its reward on
+  the imagined windows is added to the task reward and maximized by the same BPTT.
+- **Result** (one RTX 3090, 1024 environments, one seed, training statistics; no evaluation against PPO yet): 81% of the 20 s
+  episodes end without a fall after 1.1 h and 86–91% from 5.5 h on (mean length about 940 of 1000 steps); the terrain curriculum
+  reaches level 4 after 1.1 h and about 6 (of 0–9) after 5.5 h, then plateaus up to 40000 iterations (8.4 h).
 
 ## Acknowledgements
 
