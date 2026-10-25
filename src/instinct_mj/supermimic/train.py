@@ -374,7 +374,7 @@ def main() -> None:
         raise FloatingPointError(f"Nonfinite training metric: {row}")
       writer.writerow(row)
       print(json.dumps(row), flush=True)
-    if iteration % args.ckpt_every == 0:
+    if iteration % args.ckpt_every == 0 or iteration == args.wm_only_iters:
       save(iteration)
     if stop or (args.max_hours > 0 and time.monotonic() - started >= args.max_hours * 3600):
       break
