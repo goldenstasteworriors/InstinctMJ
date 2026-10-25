@@ -11,5 +11,5 @@ export WARP_CACHE_PATH=$INSTINCT_SM_RUNTIME/cache/warp
 export TORCHINDUCTOR_CACHE_DIR=$INSTINCT_SM_RUNTIME/cache/torch
 export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8
 export PATH=$INSTINCT_SM_RUNTIME/.venv/bin:/nix/ykj/supermimic/bin:$PATH
-export LD_LIBRARY_PATH=/nix/ykj/supermimic/egl/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
+export LD_LIBRARY_PATH=$INSTINCT_SM_RUNTIME/.venv/libgl/usr/lib/x86_64-linux-gnu:/nix/ykj/supermimic/egl/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
 cd "$INSTINCT_SM_ROOT"

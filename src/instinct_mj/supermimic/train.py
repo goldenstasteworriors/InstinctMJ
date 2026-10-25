@@ -12,7 +12,6 @@ import argparse
 import csv
 import json
 import math
-import os
 import signal
 import subprocess
 import time
@@ -153,7 +152,6 @@ def main() -> None:
   obs, _ = env.reset()
   state = state_from_env(env, obs)
   state_dim = state.shape[-1]
-  term_names = list(cfg.rewards["rewards"] if "rewards" in cfg.rewards else cfg.rewards)
   # MultiRewardManager groups the original flat native task terms.
   term_names = list(env.reward_manager._termwise_reward_buf["rewards"])
   wm = WorldModel(state_dim, 29, len(term_names), args.width).to(device)
