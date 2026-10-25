@@ -17,6 +17,10 @@ The server has A800 GPUs despite its SSH alias. Drivers/system CUDA are untouche
 Python 3.12, PyTorch 2.11 cu126, mjlab 1.3, MuJoCo 3.7 and MuJoCo-Warp 3.7.0.1
 are isolated in the environment. `requirements-resolved.txt` records the tested
 installation; GPU runtime packages are environment-local.
+Warp is pinned to 1.12.0: mjlab 1.3 still uses `wp.context`, removed in stable
+Warp 1.13. torchvision is the matching official 0.26.0+cu126 build. OpenGL dispatch
+libraries are unpacked from Ubuntu's libgl1/libglx0/libglvnd0 packages into the
+environment's `libgl` directory; no system library or GPU driver is replaced.
 
 ## Algorithm
 
@@ -44,7 +48,9 @@ The original parkour AMP reference distribution is not bundled. The initial
 library combines the user's retargeted contact motions (knee climb, jump-sit,
 vault and dive rolls) with all 40 public LAFAN1 G1 clips already on this server.
 CSV conversion records explicit joint names and converts xyzw to wxyz; InstinctMJ
-then reorders by name. `manifest.json` records hashes and source paths. This is
+then reorders by name. Pelvis-rooted LAFAN is transformed to the native torso root
+using FK and all three waist coordinates are reversed, following the project's
+GMR conversion. `manifest.json` records hashes and source paths. This is
 not a claim to reproduce the original parkour motion selection.
 
 Replay masks exclude reset transitions from state regression and stop multistep
@@ -83,7 +89,7 @@ bash /nix/ykj/instinct_supermimic/InstinctMJ/tools/supermimic/run_parkour.sh 202
 Short startup validation (also exercises BPTT and critic, not just environment creation):
 
 ```bash
-bash /nix/ykj/instinct_supermimic/InstinctMJ/tools/supermimic/run_parkour.sh 2026-10-25_startup_validation --iterations 3 --num-envs 64 --terrain-rows 2 --terrain-cols 20 --wm-batch 32 --pi-batch 32 --wm-batches 1 --wm-only-iters 0 --max-hours 0 --log-every 1
+INSTINCT_SM_EVAL_STEPS=16 bash /nix/ykj/instinct_supermimic/InstinctMJ/tools/supermimic/run_parkour.sh 2026-10-25_startup_validation --iterations 3 --num-envs 64 --terrain-rows 2 --terrain-cols 20 --wm-batch 32 --pi-batch 32 --wm-batches 1 --wm-only-iters 0 --max-hours 0 --log-every 1
 ```
 
 Resume uses an explicit checkpoint from `last.json`. Checkpoints include all four
@@ -97,3 +103,15 @@ episode duration/return, contact body count and curriculum level alongside model
 discriminator, policy and critic losses. Reward is not normalized to LAFAN's
 flat-ground metric. Successful updates/checkpoints establish a working training
 pipeline; they do not establish parkour success or multi-contact generalization.
+
+The launcher performs a 128-environment, 1000-step real-simulator evaluation
+after training and writes `final_eval.json`. It reports per-terrain-column raw
+reward/termination/velocity tracking/contact counts and every original reward
+term; this is evaluation on training terrain families with a fresh rollout seed.
+
+Two native initialization optimizations are included: retargeted NPZ files are
+read once into memory to avoid repeated object-storage seeks; edge merging uses
+conservative bounding-box pruning and preserves original pair order. The edge
+optimization matched the original function bit-for-bit on 42 random/adversarial
+fixtures, including fragmented collinear chains and degenerate segments. The
+temporary test script was removed after validation.

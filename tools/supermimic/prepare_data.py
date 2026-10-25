@@ -8,8 +8,8 @@ import json
 import shutil
 from pathlib import Path
 
-import numpy as np
 import mujoco
+import numpy as np
 import yaml
 
 
