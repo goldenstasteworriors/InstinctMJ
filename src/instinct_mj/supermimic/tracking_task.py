@@ -4,7 +4,14 @@ import torch
 import torch.nn.functional as F
 
 from instinct_mj.supermimic.tracking_model import (
-  CONTACT, DEPTH, TORQUE, Kinematics, angle_squared, inv, mul, rotate_full, yaw,
+  CONTACT,
+  TORQUE,
+  Kinematics,
+  angle_squared,
+  inv,
+  mul,
+  rotate_full,
+  yaw,
 )
 
 

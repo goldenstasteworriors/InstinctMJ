@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-from instinct_mj.tasks.shadowing.perceptive.config.g1.perceptive_shadowing_cfg import G1PerceptiveShadowingEnvCfg
+from instinct_mj.tasks.shadowing.perceptive.config.g1.perceptive_shadowing_cfg import (
+  G1PerceptiveShadowingEnvCfg,
+)
 
 
 def make_tracking_config(data: str, envs: int, seed: int, evaluation: bool = False):

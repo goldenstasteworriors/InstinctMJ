@@ -16,8 +16,15 @@ from instinct_mj.envs import InstinctRlEnv
 from instinct_mj.supermimic.replay import ReplayBuffer
 from instinct_mj.supermimic.tracking_config import make_tracking_config
 from instinct_mj.supermimic.tracking_model import (
-  CONTACT, DEPTH, TORQUE, TrackingCritic, TrackingPolicy, TrackingWorldModel,
-  goal, proprio, reference_at,
+  CONTACT,
+  DEPTH,
+  TORQUE,
+  TrackingCritic,
+  TrackingPolicy,
+  TrackingWorldModel,
+  goal,
+  proprio,
+  reference_at,
 )
 from instinct_mj.supermimic.tracking_task import TrackingTask
 
