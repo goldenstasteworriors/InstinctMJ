@@ -22,7 +22,6 @@ class TrackingTask:
     self.penalty_bodies = self.robot.find_bodies(contact_cfg.body_names)[0]
     self.torque_joints = self.robot.find_joints([".*ankle.*", ".*wrist.*"])[0]
     model = env.sim.mj_model
-    ids = self.robot.indexing.joint_ids.cpu().numpy()
     self.limits = self.robot.data.soft_joint_pos_limits.clone()
     self.effort = torch.zeros(29, device=env.device)
     for act in self.robot.actuators:
@@ -74,9 +73,9 @@ class TrackingTask:
       (d.link_pos_w - origin[:, :, None]).flatten(2), d.link_quat_w.flatten(2),
       d.link_lin_vel_w.flatten(2), d.link_ang_vel_w.flatten(2), d.validity[..., None].float()), -1)
 
-  def reward_terms(self, previous, s, action, ref, limits, smooth=False):
-    p, q, v, w = self.fk(s)
-    p, q, v, w = p[:, self.links], q[:, self.links], v[:, self.links], w[:, self.links]
+  def reward_terms(self, previous, s, action, ref, limits, smooth=False, with_continuation=False):
+    all_p, q, v, w = self.fk(s)
+    p, q, v, w = all_p[:, self.links], q[:, self.links], v[:, self.links], w[:, self.links]
     rp, rq = ref[:, 71:113].reshape(-1, 14, 3), ref[:, 113:169].reshape(-1, 14, 4)
     rv, rw = ref[:, 169:211].reshape(-1, 14, 3), ref[:, 211:253].reshape(-1, 14, 3)
     delta = yaw(mul(s[:, 3:7], inv(ref[:, 3:7])))[:, None].expand(-1, 14, -1)
@@ -99,15 +98,21 @@ class TrackingTask:
     c = s[:, CONTACT][:, self.penalty_bodies]
     contact = torch.sigmoid((c - 0.69314718056) / 0.1) if smooth else (c > 0.69314718056).float()
     terms["undesired_contacts"] = -0.1 * contact.sum(-1)
-    return torch.stack([terms[k] for k in self.term_names], -1) * self.env.step_dt
+    result = torch.stack([terms[k] for k in self.term_names], -1) * self.env.step_dt
+    if with_continuation:
+      return result, self._continuation(s, ref, p)
+    return result
 
   def continuation(self, s, ref):
     p, _, _, _ = self.fk(s)
+    return self._continuation(s, ref, p[:, self.links])
+
+  def _continuation(self, s, ref, p):
     rp = ref[:, 71:113].reshape(-1, 14, 3)
     gravity = torch.zeros_like(s[:, :3]); gravity[:, 2] = -1
     pg = (rotate_full(inv(s[:, 3:7]), gravity) - rotate_full(inv(ref[:, 3:7]), gravity)).norm(dim=-1)
     root = (s[:, 2] - ref[:, 2]).abs()
-    links = (p[:, self.links][:, self.extremities, 2] - rp[:, self.extremities, 2]).abs().amax(-1)
+    links = (p[:, self.extremities, 2] - rp[:, self.extremities, 2]).abs().amax(-1)
     return torch.sigmoid((0.25 - root) / 0.025) * torch.sigmoid((0.8 - pg) / 0.08) * torch.sigmoid((0.25 - links) / 0.025)
 
   @torch.no_grad()
