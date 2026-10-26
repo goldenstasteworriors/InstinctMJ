@@ -82,3 +82,31 @@ before automatic reset, so falls do not contaminate contact/pose metrics with
 the next episode's initial state. Report per-motion completions, failures,
 censoring, root/link error and body contact counts. A timeout is not success.
 The final evaluation is on the six paired training meshes, not held-out terrain.
+
+## Deployment validation — 2026-10-26
+
+- Mesh preprocessing required Shapely 2.2.0 and Rtree 1.4.1; both were installed
+  only in the existing project uv environment. The frozen requirements now
+  contain 177 packages. No drivers or system Python were changed.
+- 16-environment training, two complete actor/critic/model updates, checkpoint
+  reload and 16-step evaluation passed (`2026-10-26_tracking_validation_v3`).
+- Production-size validation passed with 512 environments, batch 256, four WM
+  batches, eight-step model training, 32-step BPTT and compiled reward/FK.
+  Three complete updates and 128-environment full-motion evaluation exited 0
+  (`2026-10-26_tracking_fullsize_validation_v2`). All ten motion-terrain pairs
+  were represented. The nearly untrained policy failed all 128 episodes; this
+  is an initialization baseline, not a trained performance claim.
+- Post-collection FK maximum position error was 4.47e-6 m, velocity error
+  1.79e-5 m/s, and maximum native reward discrepancy 2.98e-8. Native cached
+  relative frames are refreshed for comparisons at the same post-forward pose.
+- Code passes Ruff and launcher passes bash syntax validation. Validation used
+  the same launcher, environment count, batch size and compile flag as production.
+  No temporary test scripts were created or retained.
+
+Production is a fresh seed-0 run named
+`2026-10-26_supermimic_perceptive_tracking_seed0`, on physical GPU 0 of
+`ai2-root-4080`. It has 300 world-model-only warmup iterations, then joint
+training; checkpoints every 500 iterations and at the warmup boundary/exit.
+Logs are CSV/JSON, with no W&B run. The launcher is detached with nohup and its
+PID is recorded in the run directory. Inspect train.csv and process state to
+determine current progress; this document does not imply continued liveness.
