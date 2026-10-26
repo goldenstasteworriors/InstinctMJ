@@ -109,7 +109,7 @@ def main():
   if args.compile:
     reward_fn = torch.compile(reward_fn)
   replay = ReplayBuffer(args.buffer_steps, args.num_envs, "cuda:0")
-  history = proprio(state, task.defaults)[:, None].repeat(1, 10, 1)
+  history = proprio(state, task.defaults, noise=True)[:, None].repeat(1, 10, 1)
   ids = torch.arange(env.num_envs, device=env.device)
   returns, lengths = torch.zeros_like(ids, dtype=torch.float32), torch.zeros_like(ids)
   ep_returns, ep_lengths = deque(maxlen=1000), deque(maxlen=1000)
@@ -162,7 +162,7 @@ def main():
         ep_lengths.extend((lengths[done] * env.step_dt).tolist())
         returns[done] = 0; lengths[done] = 0
       failures += int(terminated.sum())
-      fresh = proprio(nxt, task.defaults)
+      fresh = proprio(nxt, task.defaults, noise=True)
       history = torch.cat((history[:, 1:], fresh[:, None]), 1)
       history[done] = fresh[done, None].expand(-1, 10, -1)
       state, ref, ctx = nxt, nref, nctx
@@ -191,7 +191,7 @@ def main():
     s, ctx = b["state"][:, 0], b["context"][:, 0]
     env_ids = b["env_id"][:, 0]
     defaults, limits = task.defaults[env_ids], task.limits[env_ids]
-    hist = proprio(b["history"], defaults[:, None])
+    hist = proprio(b["history"], defaults[:, None], noise=True)
     refs = reference_at(b["reference"][:, 0], torch.arange(args.horizon + 46, device=env.device))
     for model in (wm, critic):
       model.requires_grad_(False)
@@ -208,7 +208,7 @@ def main():
       alive = alive * cont
       xs.append(s.detach()); ns.append(nxt.detach()); rs.append(reward.detach()); cs.append(cont.detach())
       rfs.append(refs[:, j, :71])
-      hist = torch.cat((hist[:, 1:], proprio(nxt, defaults)[:, None]), 1)
+      hist = torch.cat((hist[:, 1:], proprio(nxt, defaults, noise=True)[:, None]), 1)
       s = nxt
     objective = objective + 0.99**args.horizon * alive * critic(s, refs[:, args.horizon], ctx).clamp(max=10)
     policy_loss = -objective.mean()

@@ -103,12 +103,16 @@ class Kinematics(nn.Module):
     return p, q, v, w
 
 
-def proprio(s, defaults):
+def proprio(s, defaults, noise=False):
   gravity = torch.zeros_like(s[..., :3])
   gravity[..., 2] = -1
-  return torch.cat((rotate_full(inv(s[..., 3:7]), s[..., 39:42]),
+  obs = torch.cat((rotate_full(inv(s[..., 3:7]), s[..., 39:42]),
     rotate_full(inv(s[..., 3:7]), gravity), s[..., 7:36] - defaults,
     s[..., 42:71] * 0.05, s[..., 71:100]), -1)
+  if noise:
+    scale = obs.new_tensor([0.2] * 3 + [0.05] * 3 + [0.01] * 29 + [0.025] * 29 + [0.0] * 29)
+    obs = obs + (2 * torch.rand_like(obs) - 1) * scale
+  return obs
 
 
 def reference_at(ref, step):

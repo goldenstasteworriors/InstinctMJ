@@ -18,7 +18,7 @@ class TrackingTask:
     self.extremities = [self.motion.cfg.link_of_interests.index(n) for n in
       ("left_ankle_roll_link", "right_ankle_roll_link", "left_wrist_yaw_link", "right_wrist_yaw_link")]
     self.defaults = self.robot.data.default_joint_pos.clone()
-    contact_cfg = env.cfg.rewards["undesired_contacts"].params["asset_cfg"]
+    contact_cfg = env.reward_manager.get_term_cfg("undesired_contacts").params["asset_cfg"]
     self.penalty_bodies = self.robot.find_bodies(contact_cfg.body_names)[0]
     self.torque_joints = self.robot.find_joints([".*ankle.*", ".*wrist.*"])[0]
     model = env.sim.mj_model
@@ -43,7 +43,7 @@ class TrackingTask:
       context.append(value[:, idx].flatten(1))
     self.physics = torch.cat(context, -1).clone()
     self.num_terrains = len(self.buffer.yaml_data["terrains"])
-    self.term_names = list(env.cfg.rewards)
+    self.term_names = list(env.reward_manager._termwise_reward_buf["rewards"])
 
   def origins(self):
     return self.buffer._assigned_env_origins
@@ -133,7 +133,7 @@ class TrackingTask:
     for i, name in enumerate(self.term_names):
       if name == "action_rate_l2":
         continue  # Compared on actual transitions by the trainer.
-      cfg = self.env.cfg.rewards[name]
+      cfg = self.env.reward_manager.get_term_cfg(name)
       native = cfg.func(self.env, **cfg.params) * cfg.weight * self.env.step_dt
       error = float((native - analytic[:, i]).abs().max())
       errors[f"reward_{name}_max_abs"] = error
