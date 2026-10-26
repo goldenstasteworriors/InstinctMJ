@@ -1,5 +1,10 @@
 # InstinctMJ SuperMimic parkour
 
+For the **motion-tracking / multi-contact** experiment requested on 2026-10-26,
+see [TRACKING.md](TRACKING.md) and `run_tracking.sh`. It uses paired-terrain
+Perceptive Shadowing, future motion goals and analytic FK tracking rewards.
+The locomotion/AMP experiment described below is a separate historical run.
+
 Native task: `Instinct-Parkour-Target-Amp-G1-v0`. Reference algorithm:
 [zita-ch/supermimic_vibed](https://github.com/zita-ch/supermimic_vibed).
 This experimental extension is not an exact replication of SuperMimic or a
