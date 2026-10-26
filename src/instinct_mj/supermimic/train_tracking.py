@@ -153,7 +153,7 @@ def main():
       critic.norm.update(torch.cat((state, ref[:, 0, :71], ctx), -1))
       # Verify the native action penalty on the exact executed action.
       expected = -0.1 * (action - state[:, 71:100]).square().sum(-1) * env.step_dt
-      actual = env.reward_manager._termwise_reward_buf["rewards"]["action_rate_l2"]
+      actual = env.reward_manager._termwise_reward_buf["rewards"]["action_rate_l2"] * env.step_dt
       if not torch.allclose(expected, actual, atol=2e-5, rtol=1e-4):
         raise AssertionError("Action reward mismatch")
       returns.add_(r); lengths.add_(1)
@@ -263,6 +263,7 @@ def main():
   print("INITIALIZED", json.dumps({"envs": args.num_envs, "motions": len(task.buffer.yaml_data["motion_files"]),
     "terrains": task.num_terrains, "context": ctx.shape[-1]}), flush=True)
   collect(max(32, args.wm_window + 11))
+  (log / "audit_after_collection.json").write_text(json.dumps(task.audit(state), indent=2))
   feet = task.robot.find_bodies(["left_ankle_roll_link", "right_ankle_roll_link"])[0]
   nonfoot = [i for i in range(40) if i not in feet]
   iteration = start
