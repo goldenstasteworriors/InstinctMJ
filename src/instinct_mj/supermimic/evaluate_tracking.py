@@ -25,6 +25,9 @@ def main():
   torch.set_num_threads(8)
   ckpt = torch.load(args.checkpoint, map_location="cuda:0", weights_only=False)
   cfg = make_tracking_config(ckpt["args"]["data"], args.num_envs, args.seed, evaluation=True)
+  # Training truncates at 10 s, but these reference motions can exceed 11 s.
+  # Evaluate until dataset exhaustion/failure; --steps is the explicit censoring cap.
+  cfg.terminations.pop("time_out", None)
   env = InstinctRlEnv(cfg, device="cuda:0")
   obs, _ = env.reset()
   task = TrackingTask(env)
@@ -84,7 +87,8 @@ def main():
       "mean_seconds": sum(x["seconds"] for x in rows) / max(1, len(rows)),
       "mean_root_error_m": sum(x["root_error_m"] for x in rows) / max(1, len(rows))}
   output = {"checkpoint": args.checkpoint, "iteration": ckpt["iteration"], "seed": args.seed,
-    "protocol": "First episode per environment, from full-motion start, paired training meshes, randomized physics; terminal metrics captured before reset",
+    "protocol": "First episode per environment, from full-motion start, paired training meshes, randomized physics; training timeout disabled; terminal metrics captured before reset",
+    "max_evaluation_seconds": args.steps * env.step_dt,
     "completed": result.count("motion_complete"), "failed": result.count("failure"),
     "censored": sum(x not in ("failure", "motion_complete") for x in result),
     "per_motion": per_motion, "records": records,
