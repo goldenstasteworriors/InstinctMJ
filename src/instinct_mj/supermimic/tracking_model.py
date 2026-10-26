@@ -175,7 +175,7 @@ class TrackingWorldModel(nn.Module):
     delta = self.net(self.input_norm(torch.cat((s, a, context), -1)))
     nxt = s + delta * self.delta_norm.std() + self.delta_norm.mean
     return torch.cat((nxt[:, :3], F.normalize(nxt[:, 3:7], dim=-1), nxt[:, 7:71], a,
-      nxt[:, DEPTH].clamp(-1, 1), nxt[:, CONTACT].clamp(0, 12), nxt[:, TORQUE]), -1)
+      nxt[:, DEPTH].clamp(0, 1), nxt[:, CONTACT].clamp(0, 12), nxt[:, TORQUE]), -1)
 
 
 class TrackingCritic(nn.Module):

@@ -129,7 +129,7 @@ class TrackingTask:
     for name in ("_reference_relative_base_pos", "_reference_relative_delta_quat",
                  "_reference_link_pos_relative_w", "_reference_link_quat_relative_w"):
       buffer = getattr(self.motion, name)
-      buffer.timestamp = torch.full_like(buffer.timestamp, -1)
+      buffer.timestamp = -1.0
     p, q, v, w = self.fk(s)
     d = self.robot.data
     errors = {
