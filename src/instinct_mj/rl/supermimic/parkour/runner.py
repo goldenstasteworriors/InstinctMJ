@@ -18,8 +18,11 @@ The structure follows ``..runner.SuperMimicRunner`` (perceptive shadowing). Diff
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
+from pathlib import Path
+import re
 import time
 
 import instinct_rl
@@ -568,6 +571,11 @@ class ParkourSuperMimicRunner:
                     row.update(self.latent_gap())
                 for k, v in terms_acc.items():
                     row[f"imagination/reward_term/{k}"] = mean(v)
+                self.latest_metrics = row
+                if self.log_dir is not None:
+                    Path(self.log_dir, "status.json").write_text(json.dumps({
+                        "iteration": self.it, "metrics": {k: v if math.isfinite(v) else None for k, v in row.items()}
+                    }, indent=2))
                 if self.writer is not None:
                     for k, v in row.items():
                         if not math.isnan(v):
@@ -610,6 +618,38 @@ class ParkourSuperMimicRunner:
             "fr_mean": self.fr_mean, "fr_std": self.fr_std, "style": self.style.state_dict(),
             "fail_head": self.fail_head.state_dict(), "opt_fail": self.opt_fail.state_dict(), "fail_head_start_it": self.fail_head_start_it,
         }, self._sidecar(path))  # fmt: skip
+        # Only rotate pairs explicitly recorded by this saver in this run directory.
+        # "Best" is a training proxy, not a held-out evaluation result.
+        directory = Path(path).parent.resolve()
+        manifest_path = directory / "checkpoints.json"
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
+            "owner": "parkour_supermimic_retention_v1", "pairs": [], "best": None, "best_score": None
+        }
+        if manifest.get("owner") != "parkour_supermimic_retention_v1":
+            raise ValueError(f"Unrecognized retention manifest: {manifest_path}")
+        name = Path(path).name
+        if name not in manifest["pairs"]:
+            manifest["pairs"].append(name)
+        metrics = getattr(self, "latest_metrics", {})
+        score = [metrics.get(k, float("nan")) for k in ("sim/terrain_level", "sim/episode_length", "sim/reward")]
+        if self.it > self.cfg["wm_only_iters"] and all(math.isfinite(v) for v in score):
+            if manifest["best_score"] is None or score > manifest["best_score"]:
+                manifest["best"], manifest["best_score"] = name, score
+        count = self.cfg.get("keep_latest_checkpoints", 2)
+        if count > 0:
+            keep = set(manifest["pairs"][-count:]) | {manifest["best"]}
+            for old in list(manifest["pairs"]):
+                if old in keep:
+                    continue
+                if re.fullmatch(r"model_[0-9]+\.pt", old) is None:
+                    raise ValueError(f"Invalid managed checkpoint name: {old}")
+                for candidate in (directory / old, Path(self._sidecar(str(directory / old)))):
+                    if candidate.is_symlink() or candidate.resolve().parent != directory:
+                        raise ValueError(f"Unsafe checkpoint path: {candidate}")
+                    candidate.unlink(missing_ok=True)
+                manifest["pairs"].remove(old)
+        manifest.update(latest=name, iteration=self.it, best_metric="terrain_level, episode_length, reward (training)")
+        manifest_path.write_text(json.dumps(manifest, indent=2))
 
     def load(self, path: str):
         loaded_dict = torch.load(path, weights_only=True)

@@ -8,6 +8,9 @@ case "$mode" in
   check)
     exec python -u tests/supermimic/check_parkour_heads.py "$@"
     ;;
+  eval)
+    exec python -u -m instinct_mj.scripts.supermimic.evaluate_parkour "$@"
+    ;;
   train)
     name="${1:-$(date +%F)_supermimic_parkour_seed42}"
     if (($#)); then shift; fi

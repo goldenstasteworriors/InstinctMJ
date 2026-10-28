@@ -14,6 +14,8 @@ class ParkourSuperMimicRunnerCfg(SuperMimicRunnerCfg):
 
     buffer_steps: int = 800
     """Replay buffer length in vectorized env steps (default 800; the depth stacks dominate the memory)."""
+    keep_latest_checkpoints: int = 2
+    """Retain this many recent policy/sidecar pairs plus the best training-score pair; 0 disables pruning."""
     command_margin_steps: int = 2
     """Imagination starts need the command (target) to stay for ``horizon + command_margin_steps`` more steps (default 2)."""
 
