@@ -43,7 +43,8 @@ bash tools/supermimic_locomotion/run.sh check --num-envs 64 --steps 300 --seed 4
 bash tools/supermimic_locomotion/run.sh train
 
 Training defaults: 1024 envs, seed 42, 8000 iterations, world-model batch 2048 x
-10 updates, policy batch 1024, 500 model-only iterations, bf16/compile enabled.
+10 updates, policy batch 1024, 500 model-only iterations, checkpoints every 500
+iterations, bf16/compile enabled.
 The run name automatically starts with the current date. Override native runner
 fields with --agent.FIELD VALUE. No W&B or image/video logging is enabled.
 New runs refuse to overwrite a nonempty directory. A per-GPU flock prevents
