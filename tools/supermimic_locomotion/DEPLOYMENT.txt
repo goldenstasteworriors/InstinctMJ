@@ -1,0 +1,72 @@
+G1 perceptive locomotion with SuperMimic
+======================================
+
+Source: project-instinct/InstinctMJ supermimic, commit
+7ca851e002980011f24a1664011305d0ba94aefc.
+This branch uses the upstream ParkourSuperMimicRunner built from the perceptive
+motion-tracking implementation. It does not use the historical experimental
+instinct_mj.supermimic.train or train_tracking runners.
+
+Task: Instinct-Parkour-Target-Amp-SuperMimic-G1-v0.
+The actor follows velocity commands derived from target points, not reference
+motion timestamps. Motion references train the AMP/WASABI discriminator only.
+The task's native MoE policy encodes eight 18x32 depth frames into a 128-D latent.
+The shared world model predicts physical state increments, contact logits and
+visual latent increments, conditioned on local terrain geometry and randomized
+physics/actuator lag. Training uses eight-step world-model supervision and
+32-step differentiable imagination, with analytic task rewards plus style reward.
+Terminal transitions are read before reset and included in model fitting.
+The upstream locomotion encoder reconstructs the observed depth stack; unlike
+the motion-tracking implementation, it has no separate clean-stack target.
+
+Server: ai2-root-4080. Default physical GPU: 1 (INSTINCT_LOCO_GPU overrides it).
+Code: /nix/ykj/instinct_locomotion/InstinctMJ
+Environment: /nix/ykj/instinct_locomotion/.venv
+mjlab source: /nix/ykj/instinct_locomotion/mjlab (v1.6.0)
+Logs: /workspace/ykj/instinct_supermimic/logs/locomotion_official
+Heightmaps: /workspace/ykj/instinct_supermimic/assets/locomotion_heightmaps
+Reference data: /workspace/ykj/instinct_supermimic/assets/parkour_amp
+Reference selection: selection.yaml (52 existing mixed motions, not verified
+identical to the upstream parkour_motion_without_run.yaml dataset).
+
+Installation follows the upstream uv.lock: clone mjlab v1.6.0 next to InstinctMJ,
+source tools/supermimic_locomotion/env.sh, then run uv sync --frozen.
+The deployed Python interpreter is /root/miniforge/bin/python3.12; uv creates an
+isolated environment and does not install into that interpreter's base environment.
+The env script directs temporary/build/cache files under this runtime and reuses
+the existing environment-local GL libraries. It does not change GPU drivers.
+
+All commands below run ON THE SERVER. Each command occupies one line.
+
+cd /nix/ykj/instinct_locomotion/InstinctMJ
+bash tools/supermimic_locomotion/run.sh check --num-envs 64 --steps 300 --seed 42
+bash tools/supermimic_locomotion/run.sh train
+
+Training defaults: 1024 envs, seed 42, 8000 iterations, world-model batch 2048 x
+10 updates, policy batch 1024, 500 model-only iterations, bf16/compile enabled.
+The run name automatically starts with the current date. Override native runner
+fields with --agent.FIELD VALUE. No W&B or image/video logging is enabled.
+New runs refuse to overwrite a nonempty directory. A per-GPU flock prevents
+duplicate launches through this launcher.
+
+Inference evaluation (replace CHECKPOINT and OUTPUT with absolute paths):
+bash tools/supermimic_locomotion/run.sh eval --checkpoint CHECKPOINT --output OUTPUT --num-envs 128 --seconds 20 --seed 1234
+
+Evaluation uses fresh training-randomized environments, original failure
+terminations and the first episode only, with pre-reset measurements. It reports
+survival, velocity errors, travel/displacement, terrain levels and failure reasons.
+A timeout means survival, not demonstrated target-reaching or obstacle traversal.
+Short implementation-validation runs do not establish learned performance.
+
+Outputs: policy model_N.pt plus supermimic_state_N.pt for resume, params/,
+TensorBoard scalar events, status.json and checkpoints.json. Retention keeps the
+latest two managed checkpoint pairs plus the best training-proxy pair (ordered
+by terrain level, mean episode length, then real task reward). This proxy is not
+a held-out success score. Only pairs registered by this saver are pruned.
+
+Resume (replace RUN_DIRECTORY and model_N.pt; a new dated run name is allowed):
+bash tools/supermimic_locomotion/run.sh train 2026-10-28_resume --agent.load-run RUN_DIRECTORY --agent.load-checkpoint model_N.pt --agent.max-iterations 8000
+
+The sidecar restores the world model, visual decoder, critic, style discriminator,
+failure head and optimizer states. The replay buffer is refilled on resume, as
+in the upstream implementation. Both files of a checkpoint pair are required.
