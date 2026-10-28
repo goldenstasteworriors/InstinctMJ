@@ -79,9 +79,27 @@ check passed (157 packages). Imports passed for torch 2.10.0, warp-lang 1.14.0,
 mujoco/mujoco-warp 3.11.0, mjlab 1.6.0 and instinct-rl 1.0.2. A CUDA tensor
 operation and Warp CUDA-device initialization passed on physical GPU 1.
 Local syntax / shell checks and targeted Ruff fatal-error checks passed.
-The official heads-check command exited 1; its diagnostic log was not yet
-retrieved because new SSH connections timed out during jump-host banner exchange
-(a direct connection also timed out). The log is heads_check_20261028.log in
-the log root above. Do not interpret this as a passed correctness gate.
-Full training updates, checkpoint round-trip/resume and evaluation remain
-unverified. No production training was launched by this deployment.
+The initial heads check failed because bosfs rejected the seeks in np.savez.
+Heightmap archives now encode/decode in memory and use sequential filesystem
+I/O; unreadable cache files are rebuilt. The rerun with 64 envs, 300 steps and
+seed 42 exited 0: ALL CHECKS PASSED (366 terminal transitions, 758 penetration
+samples). See heads_check_20261028_retry.log in the log root.
+Full-size training validation completed four iterations, including two policy
+updates (only wm_only_iters=2, fail_head_warmup_iters=0, max_iterations=4 and
+log/save intervals=1 differed from the launch defaults). At iteration 4:
+wm/loss=7.72368, policy/loss=-1.11356, policy/grad_norm=0.0718252,
+critic/value_loss=0.0497167, peak allocated GPU memory=14.94 GiB.
+Policy/sidecar checkpoint loading and finite model weights passed at iteration 2.
+Retention left only checkpoint pairs 3 and 4, with pair 3 marked best.
+Resume training and independent evaluation have not yet been exercised.
+
+Production launch (2026-10-28)
+-----------------------------
+Run: 2026-10-28_supermimic_parkour_seed42
+Code at launch: c7ced6d (branch feat/supermimic-locomotion-20261028).
+Physical GPU 0, 1024 envs, seed 42, 8000 iterations, 500 world-model-only
+iterations, save every 500. Fresh initialization; no validation weights loaded.
+Started with nohup and stdin redirected from /dev/null; PID at launch: 3704568.
+The run directory is under the log root above. Launcher log and PID file are
+<run>.launcher.log and <run>.pid in that root. Live scalar state is status.json
+inside the run directory; reading a still-open launcher log can fail on bosfs.
