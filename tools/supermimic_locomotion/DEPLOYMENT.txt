@@ -71,3 +71,17 @@ bash tools/supermimic_locomotion/run.sh train 2026-10-28_resume --agent.load-run
 The sidecar restores the world model, visual decoder, critic, style discriminator,
 failure head and optimizer states. The replay buffer is refilled on resume, as
 in the upstream implementation. Both files of a checkpoint pair are required.
+
+Validation status (2026-10-28)
+------------------------------
+Installed the frozen dependencies in the isolated server environment. uv pip
+check passed (157 packages). Imports passed for torch 2.10.0, warp-lang 1.14.0,
+mujoco/mujoco-warp 3.11.0, mjlab 1.6.0 and instinct-rl 1.0.2. A CUDA tensor
+operation and Warp CUDA-device initialization passed on physical GPU 1.
+Local syntax / shell checks and targeted Ruff fatal-error checks passed.
+The official heads-check command exited 1; its diagnostic log was not yet
+retrieved because new SSH connections timed out during jump-host banner exchange
+(a direct connection also timed out). The log is heads_check_20261028.log in
+the log root above. Do not interpret this as a passed correctness gate.
+Full training updates, checkpoint round-trip/resume and evaluation remain
+unverified. No production training was launched by this deployment.
