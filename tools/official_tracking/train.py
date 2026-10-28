@@ -1,6 +1,7 @@
 """Official published-result settings; only deployment paths and output name are adapted."""
 
 import argparse
+import dataclasses
 import os
 from pathlib import Path
 
@@ -13,8 +14,7 @@ def main():
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--validation", action="store_true", help="Four full-size updates with two model-only updates.")
     args = parser.parse_args()
-    cfg = TrainConfig.from_task(TASK_ID)
-    cfg.num_envs, cfg.device = 1024, "cuda:0"
+    cfg = dataclasses.replace(TrainConfig.from_task(TASK_ID), num_envs=1024, device="cuda:0")
     apply_motion_folder(cfg.env, os.environ["TRACKING_DATA"])
     cfg.agent.max_iterations = 8000
     cfg.agent.fail_head = False
