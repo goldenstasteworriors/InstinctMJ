@@ -58,9 +58,14 @@ def main() -> None:
     for _ in range(math.ceil(args.seconds / env.step_dt) + 1):
         command = reader.command.command.clone()
         before = reader.state()[0]
-        obs1, reward, dones, _ = vec.step(policy(obs))
+        action = policy(obs)
+        if not torch.isfinite(action).all():
+            raise FloatingPointError("Nonfinite evaluation action")
+        obs1, reward, dones, _ = vec.step(action)
         done = dones.bool()
         p, R, v, w, _, _ = reader.state()
+        if not all(torch.isfinite(x[active]).all() for x in (p, R, v, w, reward)):
+            raise FloatingPointError("Nonfinite evaluation state or reward")
         vb = (R.transpose(-1, -2) @ v.unsqueeze(-1)).squeeze(-1)
         wb = (R.transpose(-1, -2) @ w.unsqueeze(-1)).squeeze(-1)
         steps += active
