@@ -21,7 +21,7 @@ case "$mode" in
     exec python -u -m instinct_mj.scripts.supermimic.train_parkour \
       --num-envs 1024 --device cuda:0 --log-dir "$INSTINCT_LOCO_LOGS/$name" \
       --agent.seed 42 --agent.run-name "$name" --agent.max-iterations 8000 \
-      --agent.save-interval 4000 --agent.heightmap-cache-dir "$INSTINCT_LOCO_RUNTIME/cache/heightmaps" "$@"
+      --agent.save-interval 4000 --agent.heightmap-cache-dir "$INSTINCT_HEIGHTMAP_CACHE" "$@"
     ;;
-  *) echo 'Usage: bash tools/supermimic_locomotion/run.sh {check [options]|train [YYYY-MM-DD_name] [options]}' >&2; exit 2 ;;
+  *) echo 'Usage: bash tools/supermimic_locomotion/run.sh {check [options]|eval --checkpoint FILE --output FILE [options]|train [YYYY-MM-DD_name] [options]}' >&2; exit 2 ;;
 esac

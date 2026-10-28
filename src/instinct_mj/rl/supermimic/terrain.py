@@ -80,7 +80,7 @@ def load_or_build_heightmap(
     key.update(np.ascontiguousarray(mj_model.body_quat[terrain_id]).tobytes())
     for arr in (mj_model.mesh_vert, mj_model.mesh_face, mj_model.mesh_vertadr, mj_model.mesh_faceadr, mj_model.mesh_vertnum, mj_model.mesh_facenum):
         key.update(np.ascontiguousarray(arr).tobytes())
-    cache_dir = os.path.expanduser(cache_dir)
+    cache_dir = os.path.expanduser(os.environ.get("INSTINCT_HEIGHTMAP_CACHE", cache_dir))
     path = os.path.join(cache_dir, key.hexdigest() + ".npz")
     if os.path.exists(path):
         data = np.load(path)

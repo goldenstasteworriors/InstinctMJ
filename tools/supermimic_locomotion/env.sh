@@ -5,6 +5,7 @@ export INSTINCT_LOCO_ROOT="${INSTINCT_LOCO_ROOT:-$INSTINCT_LOCO_RUNTIME/Instinct
 export INSTINCT_LOCO_LOGS="${INSTINCT_LOCO_LOGS:-/workspace/ykj/instinct_supermimic/logs/locomotion_official}"
 export INSTINCT_PARKOUR_MOTION_DIR="${INSTINCT_PARKOUR_MOTION_DIR:-/workspace/ykj/instinct_supermimic/assets/parkour_amp}"
 export INSTINCT_PARKOUR_SELECTION="${INSTINCT_PARKOUR_SELECTION:-$INSTINCT_PARKOUR_MOTION_DIR/selection.yaml}"
+export INSTINCT_HEIGHTMAP_CACHE="${INSTINCT_HEIGHTMAP_CACHE:-/workspace/ykj/instinct_supermimic/assets/locomotion_heightmaps}"
 export UV_PROJECT_ENVIRONMENT="$INSTINCT_LOCO_RUNTIME/.venv"
 export UV_CACHE_DIR="$INSTINCT_LOCO_RUNTIME/cache/uv"
 export TMPDIR="$INSTINCT_LOCO_RUNTIME/build"
