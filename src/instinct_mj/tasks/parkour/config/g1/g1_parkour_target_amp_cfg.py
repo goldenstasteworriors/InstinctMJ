@@ -67,7 +67,9 @@ __file_dir__ = os.path.dirname(os.path.realpath(__file__))
 # Keep `filtered_motion_selection_filepath` under this directory unless you point it elsewhere.
 # Example:
 # _PARKOUR_DATASET_DIR = os.path.expanduser("~/your/path/to/parkour_motion_reference")
-_PARKOUR_DATASET_DIR = os.path.expanduser("~/Xyk/Datasets/data&model/parkour_motion_reference")
+_PARKOUR_DATASET_DIR = os.path.expanduser(os.environ.get(
+    "INSTINCT_PARKOUR_MOTION_DIR", "~/Xyk/Datasets/data&model/parkour_motion_reference"
+))
 
 # ---------------------------------------------------------------------------
 # Motion reference configs
@@ -82,9 +84,9 @@ class AmassMotionCfg(AmassMotionCfgBase):
     path: str = _PARKOUR_DATASET_DIR
     retargetting_func: object | None = None
     # NOTE: If your filtered motion list uses another filename or location, update it here.
-    filtered_motion_selection_filepath: str | None = os.path.join(
-        _PARKOUR_DATASET_DIR, "parkour_motion_without_run.yaml"
-    )
+    filtered_motion_selection_filepath: str | None = os.path.expanduser(os.environ.get(
+        "INSTINCT_PARKOUR_SELECTION", os.path.join(_PARKOUR_DATASET_DIR, "parkour_motion_without_run.yaml")
+    ))
     motion_start_from_middle_range: list[float] = field(default_factory=lambda: [0.0, 0.9])
     motion_start_height_offset: float = 0.0
     ensure_link_below_zero_ground: bool = False

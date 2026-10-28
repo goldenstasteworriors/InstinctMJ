@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+from pathlib import Path
 
 import instinct_mj.tasks  # noqa: F401  (register the tasks)
-from instinct_mj.scripts.instinct_rl.train import TrainConfig, launch_training
+from instinct_mj.scripts.instinct_rl.train import TrainConfig, launch_training, run_train
 
 DEFAULT_TASK = "Instinct-Parkour-Target-Amp-SuperMimic-G1-v0"
 
@@ -37,6 +38,7 @@ def main() -> None:
     parser.add_argument("--task", default=DEFAULT_TASK)
     parser.add_argument("--num-envs", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--log-dir", type=Path, default=None, help="Explicit output directory; must be empty for a new run.")
     args, rest = parser.parse_known_args()
     cfg = TrainConfig.from_task(args.task)
     agent = cfg.agent
@@ -50,7 +52,13 @@ def main() -> None:
             raise ValueError(f"the agent cfg has no field {name}")
         setattr(agent, name, _cast(text, getattr(agent, name)))
     agent.resume = agent.load_run is not None  # set by the cfg's __post_init__ from the default load_run
-    launch_training(args.task, dataclasses.replace(cfg, agent=agent, num_envs=args.num_envs, device=args.device))
+    cfg = dataclasses.replace(cfg, agent=agent, num_envs=args.num_envs, device=args.device)
+    if args.log_dir is None:
+        launch_training(args.task, cfg)
+    else:
+        if not agent.resume and args.log_dir.exists() and any(args.log_dir.iterdir()):
+            raise FileExistsError(f"Refusing to overwrite nonempty run directory: {args.log_dir}")
+        run_train(args.task, cfg, args.log_dir)
 
 
 if __name__ == "__main__":
