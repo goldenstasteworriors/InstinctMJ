@@ -19,9 +19,12 @@ is no PPO anywhere.
 from __future__ import annotations
 
 import copy
+import json
 import math
 import os
+import re
 import time
+from pathlib import Path
 
 import instinct_rl
 import instinct_rl.modules as modules
@@ -604,12 +607,17 @@ class SuperMimicRunner:
                     row.update(self.fail_calibration())
                     if self.it % (5 * c["log_interval"]) == 0:
                         row.update(self.termination_check())
-                    gap = self.latent_gap(images=self.writer is not None and self.it % (10 * c["log_interval"]) == 0)
+                    gap = self.latent_gap(images=False)  # scalar-only deployment logging
                     if isinstance(gap, tuple):
                         gap, images = gap
                     row.update({k: float(v) for k, v in gap.items()})
                 for k, v in terms_acc.items():
                     row[f"imagination/reward_term/{k}"] = mean(v)
+                self.latest_metrics = row
+                if self.log_dir is not None:
+                    Path(self.log_dir, "status.json").write_text(json.dumps({
+                        "iteration": self.it, "metrics": {k: v if math.isfinite(v) else None for k, v in row.items()}
+                    }, indent=2))
                 if self.writer is not None:
                     for k, v in row.items():
                         if not math.isnan(v):
@@ -662,6 +670,37 @@ class SuperMimicRunner:
             "xi_mean": self.mdp.xi_mean, "xi_scale": self.mdp.xi_scale,
             "fail_head": self.fail_head.state_dict(), "opt_fail": self.opt_fail.state_dict(), "fail_head_start_it": self.fail_head_start_it,
         }, self._sidecar(path))  # fmt: skip
+
+        # Rotate only pairs recorded by this saver. The score is a training proxy,
+        # not the official independent motion-completion evaluation.
+        directory = Path(path).parent.resolve()
+        manifest_path = directory / "checkpoints.json"
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
+            "owner": "official_tracking_retention_v1", "pairs": [], "best": None, "best_score": None
+        }
+        if manifest.get("owner") != "official_tracking_retention_v1":
+            raise ValueError(f"Unrecognized retention manifest: {manifest_path}")
+        name = Path(path).name
+        if name not in manifest["pairs"]:
+            manifest["pairs"].append(name)
+        metrics = getattr(self, "latest_metrics", {})
+        score = [1 - metrics.get("sim/terminated_fraction", float("nan")), metrics.get("sim/reward", float("nan"))]
+        if self.it > self.cfg["wm_only_iters"] and all(math.isfinite(v) for v in score):
+            if manifest["best_score"] is None or score > manifest["best_score"]:
+                manifest["best"], manifest["best_score"] = name, score
+        keep = set(manifest["pairs"][-2:]) | {manifest["best"]}
+        for old in list(manifest["pairs"]):
+            if old in keep:
+                continue
+            if re.fullmatch(r"model_[0-9]+\.pt", old) is None:
+                raise ValueError(f"Invalid managed checkpoint name: {old}")
+            for candidate in (directory / old, Path(self._sidecar(str(directory / old)))):
+                if candidate.is_symlink() or candidate.resolve().parent != directory:
+                    raise ValueError(f"Unsafe checkpoint path: {candidate}")
+                candidate.unlink(missing_ok=True)
+            manifest["pairs"].remove(old)
+        manifest.update(latest=name, iteration=self.it, best_metric="nonfailure fraction, reward (training)")
+        manifest_path.write_text(json.dumps(manifest, indent=2))
 
     def load(self, path: str):
         """Load the policy (actor-critic, its optimizer, the normalizers, the iteration) from an ``OnPolicyRunner``-format

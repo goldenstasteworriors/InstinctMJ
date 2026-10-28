@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import os
+import warnings
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import mujoco
@@ -80,14 +83,23 @@ def load_or_build_heightmap(
     key.update(np.ascontiguousarray(mj_model.body_quat[terrain_id]).tobytes())
     for arr in (mj_model.mesh_vert, mj_model.mesh_face, mj_model.mesh_vertadr, mj_model.mesh_faceadr, mj_model.mesh_vertnum, mj_model.mesh_facenum):
         key.update(np.ascontiguousarray(arr).tobytes())
-    cache_dir = os.path.expanduser(cache_dir)
+    cache_dir = os.path.expanduser(os.environ.get("INSTINCT_HEIGHTMAP_CACHE", cache_dir))
     path = os.path.join(cache_dir, key.hexdigest() + ".npz")
     if os.path.exists(path):
-        data = np.load(path)
-        return data["heights"], float(data["x0"]), float(data["y0"])
+        try:
+            with open(path, "rb") as f:
+                payload = io.BytesIO(f.read())
+            with np.load(payload) as data:
+                return data["heights"], float(data["x0"]), float(data["y0"])
+        except (OSError, ValueError, EOFError, zipfile.BadZipFile) as exc:
+            warnings.warn(f"Rebuilding unreadable heightmap cache {path}: {exc}", stacklevel=2)
     heights, x0, y0 = build_heightmap(mj_model, resolution)
     os.makedirs(cache_dir, exist_ok=True)
-    np.savez(path, heights=heights, x0=x0, y0=y0)
+    # Object-storage mounts may reject the seeks used by NumPy's ZIP writer.
+    payload = io.BytesIO()
+    np.savez(payload, heights=heights, x0=x0, y0=y0)
+    with open(path, "wb") as f:
+        f.write(payload.getbuffer())
     return heights, x0, y0
 
 
