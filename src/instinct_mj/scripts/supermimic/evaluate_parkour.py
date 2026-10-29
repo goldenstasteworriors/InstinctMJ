@@ -29,6 +29,9 @@ def main() -> None:
     parser.add_argument("--num-envs", default=128, type=int)
     parser.add_argument("--seconds", default=20.0, type=float)
     parser.add_argument("--seed", default=1234, type=int)
+    parser.add_argument("--video", type=Path, help="Optional four-view MP4; first episodes freeze at termination.")
+    parser.add_argument("--video-envs", nargs=4, type=int, default=[0, 32, 64, 96])
+    parser.add_argument("--video-label", default="SuperMimic locomotion")
     args = parser.parse_args()
     if args.num_envs < 2 or args.seconds <= 0:
         raise ValueError("Evaluation requires at least two environments and positive seconds")
@@ -55,7 +58,12 @@ def main() -> None:
     end_pos = starts.clone()
     result, reasons = ["step_limit"] * n, [[] for _ in range(n)]
     contact_sum = torch.zeros(reader.num_contacts, device=dev)
-    for _ in range(math.ceil(args.seconds / env.step_dt) + 1):
+    video = None
+    if args.video is not None:
+        from instinct_mj.scripts.supermimic.parkour_video import ParkourVideo
+
+        video = ParkourVideo(env, args.video, args.video_envs, args.video_label, levels, kinds)
+    for step in range(1, math.ceil(args.seconds / env.step_dt) + 2):
         command = reader.command.command.clone()
         before = reader.state()[0]
         action = policy(obs)
@@ -79,6 +87,8 @@ def main() -> None:
             terms = [name for name in env.termination_manager.active_terms if env.termination_manager.get_term(name)[i]]
             reasons[i] = terms
             result[i] = "failure" if env.reset_terminated[i] else ("survived_horizon" if "time_out" in terms else "other_truncation")
+        if video is not None:
+            video.capture(step, active, done, result, reasons)
         active &= ~done
         if not active.any():
             break
@@ -106,6 +116,8 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({**summary, "records": records}, indent=2))
     print(json.dumps(summary), flush=True)
+    if video is not None:
+        video.close()
     env.close()
 
 
