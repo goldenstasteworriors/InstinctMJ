@@ -180,3 +180,37 @@ Run the following on ai2-root-4080, each command on one line:
 cd /nix/ykj/instinct_locomotion/InstinctMJ
 bash tools/supermimic_locomotion/service_20000.sh start
 bash tools/supermimic_locomotion/service_20000.sh status
+
+Launch verification: Supervisor started both jobs on 2026-10-29 at 13:56:04
+Asia/Shanghai, from code commit efbf869. Physical GPU binding was checked in
+each process environment: resume PID 3489823 -> GPU 0; fresh PID 3489807 -> GPU 2.
+The saved env.yaml files are identical. Saved agent.yaml differences are only
+the three requested flags, initialization/checkpoint fields and run names.
+Compared with the original 8000-iteration run, the resumed environment differs
+only in the three smooth dont_wait parameters; other training changes are only
+the total iteration target and resume/run metadata.
+At 14:06 Asia/Shanghai both services were RUNNING: resume at iteration 8350,
+fresh at iteration 550 (past the 500-iteration world-model-only warmup).
+Both world-model and policy losses/gradients were finite. The fresh model_500.pt
+and supermimic_state_500.pt were loaded on CPU and their iteration=500 metadata
+and model/optimizer state presence verified. These are launch checks, not a
+claim about learned task performance. No scheduled monitoring was installed.
+
+Task-specific checks retained for this launch:
+- Real failures are torso contact >1 N, tilt >1 rad and root height <0.5 m;
+  the 20 s time limit and terrain boundary are truncations. Dataset exhaustion
+  silently resamples the AMP reference. No object manipulation is present.
+- runner.collect stores pre-reset transitions and reset_terminated separately
+  from done; the failure head fits terminated, not timeout labels. Imagination
+  uses the existing smooth torso-contact/tilt/height termination approximation;
+  the resumed branch additionally uses the learned failure probability.
+- The actual wm.step calls receive state, action, context (joint delays,
+  friction, previous action), yaw-aligned local terrain scan and depth latent.
+  Replay stores depth at s and pre-reset s1; its eight-frame image stack is
+  encoded for initialization/targets, and latents are predicted during rollout.
+  State/terrain/friction are simulation-privileged inputs. Contact indicators
+  supervise outputs, not explicit contact-force inputs. Target commands enter
+  policy/reward/critic computations rather than the dynamics input directly.
+Code: src/instinct_mj/rl/supermimic/parkour/runner.py (collect, wm_update,
+_wm_rollout, _imag_core, policy_update), parkour/mdp.py (scan, soft_termination),
+and tasks/parkour/config/g1/g1_parkour_target_amp_cfg.py (terminations).
