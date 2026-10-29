@@ -218,12 +218,19 @@ and tasks/parkour/config/g1/g1_parkour_target_amp_cfg.py (terminations).
 Serial AMP-data/config comparison (2026-10-30)
 --------------------------------------------
 Plan: tools/supermimic_locomotion/queue_20261030.json.
-Order: walk_retained, walk_official, run_retained, run_official,
-noamp_retained, noamp_official. All start fresh, 20000 iterations, 1024 envs,
-seed 42 and the same smooth dont_wait/task/WM configuration.
+Revised per user clarification: twelve single-factor experiments. Order: walk,
+run, noamp; within each group: retained, no_fail_head, no_failure_sampling,
+no_holdout. All start fresh, 20000 iterations, 1024 envs, seed 42 and the same
+smooth dont_wait/task/WM configuration.
 Retained = fail_head True / wm_failure_frac 0.25 / wm_holdout_envs 0.1.
-Official = False / 0 / 0. This compares all three switches together, not their
-individual effects. Each AMP condition has both configurations.
+no_fail_head = False / 0.25 / 0.1; no_failure_sampling = True / 0 / 0.1;
+no_holdout = True / 0.25 / 0. Each changes exactly one switch relative to its
+same-AMP baseline. Failure-head fitting remains enabled even when its rollout
+use is disabled. Zero holdout changes the diagnostic split; its loss is not a
+held-out generalization metric. No all-three-off experiment is queued.
+The superseded six-job queue was stopped during first-run initialization; its
+manifest/logs are preserved under amp_ablation_20261030. The revised queue uses
+a distinct ID and fresh run directories to avoid continuation confounds.
 Walk references: 12 selected torso-base walk clips. Run references: four run
 and two sprint clips. Versioned lists are under selections/; preparation copies
 them to the existing /workspace dataset mount and records clip hashes/durations.
@@ -247,7 +254,7 @@ do not enter the policy. Metrics include survival (not obstacle success), durati
 linear/yaw tracking errors, path length and displacement. Results accumulate in
 comparison.json/csv after every job. No video or scheduled chat notification.
 The manifest, state, bounded logs, and evaluation files are under:
-/workspace/ykj/instinct_supermimic/logs/locomotion_official/amp_ablation_20261030
+/workspace/ykj/instinct_supermimic/logs/locomotion_official/amp_single_ablation_20261030
 
 On ai2-root-4080, each command is one line:
 cd /nix/ykj/instinct_locomotion/InstinctMJ

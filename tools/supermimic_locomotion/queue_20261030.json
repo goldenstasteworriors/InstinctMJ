@@ -1,5 +1,5 @@
 {
-  "id": "amp_ablation_20261030",
+  "id": "amp_single_ablation_20261030",
   "gpu_pool": [0, 3],
   "max_gpu_used_mb": 2048,
   "max_gpu_utilization": 35,
@@ -11,10 +11,16 @@
   "eval_seconds": 20,
   "jobs": [
     {"id": "walk_retained", "amp": "walk", "flags": [true, 0.25, 0.1]},
-    {"id": "walk_official", "amp": "walk", "flags": [false, 0, 0]},
+    {"id": "walk_no_fail_head", "amp": "walk", "flags": [false, 0.25, 0.1]},
+    {"id": "walk_no_failure_sampling", "amp": "walk", "flags": [true, 0, 0.1]},
+    {"id": "walk_no_holdout", "amp": "walk", "flags": [true, 0.25, 0]},
     {"id": "run_retained", "amp": "run", "flags": [true, 0.25, 0.1]},
-    {"id": "run_official", "amp": "run", "flags": [false, 0, 0]},
+    {"id": "run_no_fail_head", "amp": "run", "flags": [false, 0.25, 0.1]},
+    {"id": "run_no_failure_sampling", "amp": "run", "flags": [true, 0, 0.1]},
+    {"id": "run_no_holdout", "amp": "run", "flags": [true, 0.25, 0]},
     {"id": "noamp_retained", "amp": "none", "flags": [true, 0.25, 0.1]},
-    {"id": "noamp_official", "amp": "none", "flags": [false, 0, 0]}
+    {"id": "noamp_no_fail_head", "amp": "none", "flags": [false, 0.25, 0.1]},
+    {"id": "noamp_no_failure_sampling", "amp": "none", "flags": [true, 0, 0.1]},
+    {"id": "noamp_no_holdout", "amp": "none", "flags": [true, 0.25, 0]}
   ]
 }
