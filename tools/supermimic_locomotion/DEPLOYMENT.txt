@@ -128,3 +128,34 @@ It exports scalar CSV, milestone JSON, training curves (PNG/SVG) and the reward
 and gradient comparison. Training failures are not obstacle success rates.
 Simulator task reward excludes AMP; imagined total reward includes AMP, so the
 two totals must not be used directly as a model exploitation metric.
+
+Validation and historical curves (2026-10-29)
+-------------------------------------------
+Remote checks passed in the existing project UV environment: both SuperMimic
+task registrations use the smooth parameters, PPO retains the hard values,
+termination configs match, penalty is bounded/monotonic, stop commands have
+exactly zero penalty and gradient, finite-difference autograd checks pass, and
+torch.compile full-graph capture with the eager backend passes. The environment
+reward wrapper equals the shared primitive on controlled body-frame inputs.
+
+The existing check_parkour_heads.py was executed in memory with TASK changed to
+the SuperMimic task, 64 envs, 300 steps, seed 42 (no temporary test script).
+ALL CHECKS PASSED: 371 terminal transitions, 755 samples with volume penetration.
+The dont_wait comparison had max absolute error 0.01329 and mean 0.0004267 in
+the checker's units, including the known one-physics-substep state staleness.
+This is an implementation check, not evidence of improved trained performance.
+No new production training was started after changing the reward.
+
+The random-action check emitted height-field collision-overflow warnings (616
+messages). These also occurred before this change: 1745 in the original heads
+check and 623462 in the original production launcher log. These counts are log
+messages, not unique failures or episodes. Their effect on task performance has
+not been isolated; collision settings were not changed in this reward patch.
+
+Artifacts are in the locomotion log root's diagnostics_2026-10-29 directory:
+scalars.csv, summary.json, training_curves.png/svg, dont_wait_reward.png,
+smooth_heads_check.log. The curves describe the original hard-reward run.
+Over logged samples in iterations 7001..8000, mean episode duration is 16.381 s,
+mean terminated fraction 0.34234 and mean real task reward 3.80933 per second.
+Terrain level at iteration 8000 is 3.93262 and was still increasing. Curriculum
+changes confound direct comparisons of endpoint survival at different iterations.
