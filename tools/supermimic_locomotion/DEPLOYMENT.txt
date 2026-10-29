@@ -214,3 +214,43 @@ Task-specific checks retained for this launch:
 Code: src/instinct_mj/rl/supermimic/parkour/runner.py (collect, wm_update,
 _wm_rollout, _imag_core, policy_update), parkour/mdp.py (scan, soft_termination),
 and tasks/parkour/config/g1/g1_parkour_target_amp_cfg.py (terminations).
+
+Serial AMP-data/config comparison (2026-10-30)
+--------------------------------------------
+Plan: tools/supermimic_locomotion/queue_20261030.json.
+Order: walk_retained, walk_official, run_retained, run_official,
+noamp_retained, noamp_official. All start fresh, 20000 iterations, 1024 envs,
+seed 42 and the same smooth dont_wait/task/WM configuration.
+Retained = fail_head True / wm_failure_frac 0.25 / wm_holdout_envs 0.1.
+Official = False / 0 / 0. This compares all three switches together, not their
+individual effects. Each AMP condition has both configurations.
+Walk references: 12 selected torso-base walk clips. Run references: four run
+and two sprint clips. Versioned lists are under selections/; preparation copies
+them to the existing /workspace dataset mount and records clip hashes/durations.
+No AMP uses style_reward_coef=0 AND style_minibatches=0. The unused reference
+loader/discriminator structure remains; no adversarial style reward, gradient,
+or discriminator update influences learning. All other objectives are retained.
+
+The project Supervisor runs one serial worker. It chooses only GPU 0 or 3 when
+used memory <=2048 MiB and utilization <=35%, holds the project's GPU flock
+through training and evaluation, and launches no concurrent experiments.
+When neither card is available it waits. GPU 1/2 are excluded. Any phase failure
+stops the queue for diagnosis; there is no automatic restart. Existing artifacts
+are never blindly overwritten. Source changes after preparation stop the queue.
+Run names use the actual start date, including jobs starting after midnight.
+
+Each completed model is evaluated for three seeds (1234/2345/3456), 128 first
+episodes each, 20 s, with the common training task's randomization/terminations
+and initial levels 0..5. Evaluation curriculum updates are disabled. All policies
+use the original reference selection for common initialization; these references
+do not enter the policy. Metrics include survival (not obstacle success), duration,
+linear/yaw tracking errors, path length and displacement. Results accumulate in
+comparison.json/csv after every job. No video or scheduled chat notification.
+The manifest, state, bounded logs, and evaluation files are under:
+/workspace/ykj/instinct_supermimic/logs/locomotion_official/amp_ablation_20261030
+
+On ai2-root-4080, each command is one line:
+cd /nix/ykj/instinct_locomotion/InstinctMJ
+bash tools/supermimic_locomotion/service_queue_20261030.sh prepare
+bash tools/supermimic_locomotion/service_queue_20261030.sh start
+bash tools/supermimic_locomotion/service_queue_20261030.sh status

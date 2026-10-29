@@ -1,0 +1,20 @@
+{
+  "id": "amp_ablation_20261030",
+  "gpu_pool": [0, 3],
+  "max_gpu_used_mb": 2048,
+  "max_gpu_utilization": 35,
+  "iterations": 20000,
+  "num_envs": 1024,
+  "seed": 42,
+  "eval_seeds": [1234, 2345, 3456],
+  "eval_envs": 128,
+  "eval_seconds": 20,
+  "jobs": [
+    {"id": "walk_retained", "amp": "walk", "flags": [true, 0.25, 0.1]},
+    {"id": "walk_official", "amp": "walk", "flags": [false, 0, 0]},
+    {"id": "run_retained", "amp": "run", "flags": [true, 0.25, 0.1]},
+    {"id": "run_official", "amp": "run", "flags": [false, 0, 0]},
+    {"id": "noamp_retained", "amp": "none", "flags": [true, 0.25, 0.1]},
+    {"id": "noamp_official", "amp": "none", "flags": [false, 0, 0]}
+  ]
+}
