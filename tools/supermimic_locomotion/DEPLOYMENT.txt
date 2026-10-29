@@ -159,3 +159,24 @@ Over logged samples in iterations 7001..8000, mean episode duration is 16.381 s,
 mean terminated fraction 0.34234 and mean real task reward 3.80933 per second.
 Terrain level at iteration 8000 is 3.93262 and was still increasing. Curriculum
 changes confound direct comparisons of endpoint survival at different iterations.
+
+Two 20000-iteration runs on ai2-root-4080 (2026-10-29)
+---------------------------------------------------
+User requested both runs finish at TOTAL iteration 20000. Both use the smooth
+dont_wait reward, unchanged AMP data (52 motions), 1024 envs, seed 42 and the
+existing locked training environment. No physics/contact capacity changes.
+GPU 0: resume model_8000.pt and its full sidecar from the original run; flags
+fail_head=True, wm_failure_frac=0.25, wm_holdout_envs=0.1 (12000 new iterations).
+GPU 2: fresh initialization; flags False, 0, 0 (20000 new iterations).
+Initialization differs as requested, so this pair is not a controlled ablation
+of only the three flags. Resume restores networks and optimizers, but refills
+replay and reinitializes simulation/terrain curriculum as in the upstream runner.
+
+An isolated service-env contains supervisor==4.3.0; training dependencies are
+not changed. The project-scoped Supervisor socket exposes both job states.
+There is no automatic restart; stdout has bounded rotation to limit the known
+collision-warning spam. Checkpoints retain the latest two plus the best proxy.
+Run the following on ai2-root-4080, each command on one line:
+cd /nix/ykj/instinct_locomotion/InstinctMJ
+bash tools/supermimic_locomotion/service_20000.sh start
+bash tools/supermimic_locomotion/service_20000.sh status
