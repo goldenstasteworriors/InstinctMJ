@@ -103,3 +103,28 @@ Started with nohup and stdin redirected from /dev/null; PID at launch: 3704568.
 The run directory is under the log root above. Launcher log and PID file are
 <run>.launcher.log and <run>.pid in that root. Live scalar state is status.json
 inside the run directory; reading a still-open launcher log can fail on bosfs.
+
+Smooth anti-stopping reward (2026-10-29)
+--------------------------------------
+The SuperMimic train and Play task registrations now enable a smooth dont_wait
+penalty, shared by the real environment and analytic imagination reward.
+The original PPO registrations keep the hard reward. All other task terms,
+termination thresholds, resets, world-model inputs and AMP settings are retained.
+The 2026-10-28 checkpoint and curves above were trained with the HARD reward.
+This change requires a new training experiment to establish its performance.
+
+The original tests [vx < 0.15], [vx < 0], [vx < -0.15] become sigmoids with
+temperature 0.05 m/s. Their sum is multiplied by a C2 command gate: exactly zero
+for forward commands <= 0.1 m/s, exactly one for commands >= 0.3 m/s, and a
+quintic smoothstep in between. The negative weight stays -0.5 and the environment
+dt scaling stays unchanged. A zero command (standing, pure turning, reached
+target) has exactly zero penalty and zero speed gradient. Backward motion is
+penalized more strongly than stopping. This bounded term does not replace
+velocity tracking and is not a command to move during a requested stop.
+
+Curve exporter (run inside the sourced project environment; one command line):
+python tools/supermimic_locomotion/plot_training.py --run-dir RUN_DIRECTORY --output-dir OUTPUT_DIRECTORY
+It exports scalar CSV, milestone JSON, training curves (PNG/SVG) and the reward
+and gradient comparison. Training failures are not obstacle success rates.
+Simulator task reward excludes AMP; imagined total reward includes AMP, so the
+two totals must not be used directly as a model exploitation metric.

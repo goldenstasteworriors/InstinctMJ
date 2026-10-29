@@ -25,6 +25,8 @@ import torch
 from mjlab.utils.lab_api.math import wrap_to_pi
 from mjlab.utils.lab_api.string import resolve_matching_names_values
 
+from instinct_mj.utils.smooth_rewards import smooth_dont_wait_penalty
+
 from ..kinematics import G1Kinematics
 from ..mdp import INV_DIM, invariant_features
 from ..rotations import mv, yaw_mat
@@ -272,9 +274,16 @@ class ParkourMDP:
         std = P["track_ang_vel_z_exp"]["std"]
         t["track_ang_vel_z_exp"] = torch.exp(-((vc[..., 2] - w_b[..., 2]) ** 2) / std**2)
         t["heading_error"] = vc[..., 2].abs()
-        t["dont_wait"] = (vc[..., 0] > 0.3).float() * (
-            (v_b[..., 0] < 0.15).float() + (v_b[..., 0] < 0.0).float() + (v_b[..., 0] < -0.15).float()
-        )
+        temperature = P["dont_wait"].get("velocity_temperature")
+        if temperature is not None:
+            t["dont_wait"] = smooth_dont_wait_penalty(
+                v_b[..., 0], vc[..., 0], temperature,
+                P["dont_wait"].get("command_min", 0.1), P["dont_wait"].get("command_full", 0.3),
+            )
+        else:
+            t["dont_wait"] = (vc[..., 0] > 0.3).float() * (
+                (v_b[..., 0] < 0.15).float() + (v_b[..., 0] < 0.0).float() + (v_b[..., 0] < -0.15).float()
+            )
         t["is_alive"] = torch.ones_like(vc[..., 0])  # the algorithm multiplies by the survival probability
         thr = self._param("stand_still", "threshold")
         dof_error = (q - self.default_q).abs().sum(-1)

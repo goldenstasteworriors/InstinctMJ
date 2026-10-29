@@ -12,6 +12,7 @@ from instinct_mj.envs.mdp.rewards.regularizations import (
     applied_torque_limits_by_ratio as _applied_torque_limits_by_ratio_general,
 )
 from instinct_mj.envs.mdp.rewards.regularizations import motors_power_square as _motors_power_square_general
+from instinct_mj.utils.smooth_rewards import smooth_dont_wait_penalty
 
 if TYPE_CHECKING:
     from mjlab.entity import Entity
@@ -57,12 +58,23 @@ def dont_wait(
     env: ManagerBasedRlEnv,
     command_name: str,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    velocity_temperature: float | None = None,
+    command_min: float = 0.1,
+    command_full: float = 0.3,
 ) -> torch.Tensor:
-    """Penalize standing still when there is a forward velocity command."""
+    """Penalize stopping under a forward command; optionally smooth for BPTT.
+
+    ``None`` preserves the original PPO reward. SuperMimic configures a positive
+    temperature and uses the identical primitive in its analytic reward head.
+    """
     asset: Entity = env.scene[asset_cfg.name]
     lin_vel_cmd_x = env.command_manager.get_command(command_name)[:, 0]
     lin_vel_x = asset.data.root_link_lin_vel_b[:, 0]
 
+    if velocity_temperature is not None:
+        return smooth_dont_wait_penalty(
+            lin_vel_x, lin_vel_cmd_x, velocity_temperature, command_min, command_full
+        )
     return (lin_vel_cmd_x > 0.3) * (
         (lin_vel_x < 0.15).float() + (lin_vel_x < 0.0).float() + (lin_vel_x < -0.15).float()
     )
