@@ -25,6 +25,8 @@ TASK = "Instinct-Parkour-Target-Amp-SuperMimic-G1-v0"
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True, type=Path)
+    parser.add_argument("--task", default=TASK)
+    parser.add_argument("--perception-intervention", choices=("intact", "shuffled", "mean"), default="intact")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--num-envs", default=128, type=int)
     parser.add_argument("--seconds", default=20.0, type=float)
@@ -37,13 +39,13 @@ def main() -> None:
         raise ValueError("Evaluation requires at least two environments and positive seconds")
     torch.set_num_threads(8)
     torch.manual_seed(args.seed)
-    cfg = load_env_cfg(TASK)
+    cfg = load_env_cfg(args.task)
     cfg.seed, cfg.scene.num_envs = args.seed, args.num_envs
     cfg.auto_reset, cfg.monitors, cfg.curriculum = False, {}, {}
     cfg.episode_length_s = args.seconds
-    env = load_env_cls(TASK)(cfg, device="cuda:0")
-    vec = load_vecenv_cls(TASK)(env, policy_group="policy", critic_group="critic")
-    runner = load_runner_cls(TASK)(vec, load_instinct_rl_cfg(TASK).to_dict(), device="cuda:0")
+    env = load_env_cls(args.task)(cfg, device="cuda:0")
+    vec = load_vecenv_cls(args.task)(env, policy_group="policy", critic_group="critic")
+    runner = load_runner_cls(args.task)(vec, load_instinct_rl_cfg(args.task).to_dict(), device="cuda:0")
     runner.load(str(args.checkpoint))
     policy = runner.get_inference_policy()
     reader = ParkourSimReader(env)
@@ -66,7 +68,12 @@ def main() -> None:
     for step in range(1, math.ceil(args.seconds / env.step_dt) + 2):
         command = reader.command.command.clone()
         before = reader.state()[0]
-        action = policy(obs)
+        policy_obs = obs
+        if args.perception_intervention != "intact":
+            policy_obs = obs.clone()
+            visual = obs[:, runner.depth_slice]
+            policy_obs[:, runner.depth_slice] = visual.roll(1, 0) if args.perception_intervention == "shuffled" else visual.mean(0, keepdim=True)
+        action = policy(policy_obs)
         if not torch.isfinite(action).all():
             raise FloatingPointError("Nonfinite evaluation action")
         obs1, reward, dones, _ = vec.step(action)
@@ -106,6 +113,7 @@ def main() -> None:
                 "travel_xy_m": float(travel[i]), "displacement_xy_m": float((end_pos[i, :2] - starts[i, :2]).norm())}
                for i in range(n)]
     summary = {"checkpoint": str(args.checkpoint), "iteration": runner.it, "seed": args.seed, "episodes": n,
+               "task": args.task, "perception_intervention": args.perception_intervention,
                "protocol": "First episode; training randomization/terminations; pre-reset metrics; no curriculum updates",
                "survived_horizon": result.count("survived_horizon"), "failed": result.count("failure"),
                "censored": sum(x not in ("failure", "survived_horizon") for x in result),

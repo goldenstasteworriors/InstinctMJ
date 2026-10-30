@@ -77,22 +77,24 @@ class ParkourSuperMimicRunner:
             normalizer.to(device)
             self.normalizers[obs_group_name] = normalizer
         self.pol_norm = self.normalizers.get("policy")  # the task trains without observation normalization
+        self.perception_term = "height_image" if "height_image" in obs_format["policy"] else "depth_image"
+        self.perception_shape = tuple(obs_format["policy"][self.perception_term])
         offset = 0
         for name, shape in obs_format["policy"].items():
-            if name == "depth_image":
+            if name == self.perception_term:
                 break
             offset += math.prod(shape)
-        self.depth_dim = math.prod(DEPTH_SHAPE)
+        self.depth_dim = math.prod(self.perception_shape)
         self.depth_slice = slice(offset, offset + self.depth_dim)
-        assert tuple(obs_format["policy"]["depth_image"]) == DEPTH_SHAPE
+        assert len(self.perception_shape) == 3
         # the policy's depth encoder E: the encoder block of the depth_image term
         blocks = self.ac.encoders._parallel_blocks
         cfgs = self.ac.encoders.block_configs
-        name = next(n for n in blocks if "depth_image" in cfgs[n]["component_names"])
+        name = next(n for n in blocks if self.perception_term in cfgs[n]["component_names"])
         self.enc, self.z_dim = blocks[name], blocks[name].output_size
         # the actor MLP input is the encoder output segment: every non-image term in order, then the depth latent(s)
         segments = list(self.ac.encoders.output_segment)
-        assert segments[: len(obs_format["policy"]) - 1] == [n for n in obs_format["policy"] if n != "depth_image"]
+        assert segments[: len(obs_format["policy"]) - 1] == [n for n in obs_format["policy"] if n != self.perception_term]
         assert len(segments) == len(obs_format["policy"]) and segments[-1].endswith(name)
         self.N = env.num_envs
         self.it = 0
@@ -106,13 +108,13 @@ class ParkourSuperMimicRunner:
         return self.pol_norm(obs) if self.pol_norm is not None else obs
 
     def encode_depth(self, depth: torch.Tensor) -> torch.Tensor:
-        """Latent of the policy's depth encoder for depth stacks (B, *DEPTH_SHAPE) in [0, 1], normalized as in the policy
+        """Latent of the policy's depth encoder for depth stacks (B, *self.perception_shape) in [0, 1], normalized as in the policy
         observation (the encoder sees exactly what it sees in ``act_inference``)."""
         x = depth.flatten(1)
         if self.pol_norm is not None:
             n = self.pol_norm
             x = (x - n._mean[0, self.depth_slice]) / (n._std[0, self.depth_slice] + n.eps)
-        return self.enc(x.view(-1, *DEPTH_SHAPE))
+        return self.enc(x.view(-1, *self.perception_shape))
 
     # ------------------------------------------------------------------------------------------------
     def setup_training(self) -> None:
@@ -134,8 +136,10 @@ class ParkourSuperMimicRunner:
         self.fr_mean, self.fr_std = friction.mean(0), friction.std(0).clamp(min=1e-3)
         self.fr_n = (friction - self.fr_mean) / self.fr_std  # (N, 1) normalized friction (startup randomization)
         ctx_dim = XI_DIM + NUM_J  # world-model context: [episode context xi (lags, friction), previous action]
-        self.wm = WorldModel(self.scanner.num_rays, self.K, ctx_dim, self.z_dim).to(device)
-        self.latent_dec = LatentDecoder(self.z_dim, channels=DEPTH_SHAPE[0]).to(device)
+        self.wm = WorldModel(self.scanner.num_rays if c.get("wm_use_privileged_scan", True) else 0, self.K, ctx_dim, self.z_dim).to(device)
+        from .perception import PerceptionDecoder
+        self.latent_dec = (LatentDecoder(self.z_dim, channels=self.perception_shape[0]) if self.perception_term == "depth_image"
+                           else PerceptionDecoder(self.z_dim, self.perception_shape)).to(device)
         self.critic = Critic(self.mdp.critic_dim).to(device)
         self.wm_params = [*self.wm.parameters(), *self.enc.parameters(), *self.latent_dec.parameters()]
         self.opt_wm = torch.optim.Adam(self.wm_params, lr=c["lr"])
@@ -147,7 +151,9 @@ class ParkourSuperMimicRunner:
             self.obs_format["amp_policy"], device, c["style_discriminator_kwargs"], "AdamW", c["style_optimizer_kwargs"],
             c["style_reward_coef"], c["style_reward_type"], c["style_loss_func"], 1.0, c["style_gradient_penalty_coef"],
             c["style_weight_decay_coef"], c["style_logit_weight_decay_coef"],
-        )  # fmt: skip
+        ) if c["style_reward_coef"] != 0 else None  # fmt: skip
+        if self.style is None and c["style_minibatches"] != 0:
+            raise ValueError("No-AMP requires style_minibatches=0")
         self.err_floor = ERR_FLOOR.to(device)
         fields = {
             "s": (STATE_DIM, torch.float32), "s1": (STATE_DIM, torch.float32),
@@ -157,15 +163,15 @@ class ParkourSuperMimicRunner:
             "time_left": ((), torch.float32),  # time until the command is resampled, at s
             "lags": (NUM_J, torch.float32),  # per-joint actuation delay of the episode
             "timers": (4, torch.float32), "timers1": (4, torch.float32),  # feet air / contact timers at s / s1
-            "depth": (DEPTH_SHAPE, torch.uint8),  # the env's policy depth stack at s
-            "depth1": (DEPTH_SHAPE, torch.uint8),  # ... at s1 (pre-reset): latent target / reconstruction input
+            "depth": (self.perception_shape, torch.uint8),  # the env's policy depth stack at s
+            "depth1": (self.perception_shape, torch.uint8),  # ... at s1 (pre-reset): latent target / reconstruction input
             "r": ((), torch.float32), "ep_step": ((), torch.int32), "done": ((), torch.bool), "terminated": ((), torch.bool),
         }  # fmt: skip
         self.buffer = ReplayBuffer(c["buffer_steps"], self.N, self.K, device, c["wm_holdout_envs"], fields=fields)
         self.buffer.window_keys = ("s", "s1", "a", "a_prev", "contact", "cmd", "lags", "timers", "timers1", "depth", "depth1", "done", "terminated")
         self.buffer.start_keys = ("s", "a_prev", "cmd", "lags", "timers", "depth")
         self.buffer.hist_keys = ("s", "a_prev", "cmd")
-        amp_dim = get_subobs_size(self.obs_format["amp_reference"])
+        amp_dim = get_subobs_size(self.obs_format["amp_reference"]) if self.style is not None else 0
         self.amp_ref = torch.zeros(c["style_reference_steps"], self.N, amp_dim, dtype=torch.float16, device=device)
         self.amp_ref_ptr, self.amp_ref_size = 0, 0
         self.obs, extras = env.get_observations()
@@ -175,6 +181,12 @@ class ParkourSuperMimicRunner:
         if self.resume_path is not None:
             self._load_sidecar(self.resume_path)
         self.training_ready = True
+
+    def wm_scan(self, S):
+        """No direct geometric side channel in the perception-only experiment."""
+        if self.cfg.get("wm_use_privileged_scan", True):
+            return self.mdp.scan(S)
+        return S[0][..., :0]
 
     @staticmethod
     def episode_context(lags, fr_n):
@@ -194,7 +206,7 @@ class ParkourSuperMimicRunner:
             S, z = unflatten_state(s[:, 0]), z0
             preds, logits, zs = [], [], []
             for j in range(k):
-                S, lg, z = wm.step(S, a[:, j], ctx[:, j], mdp.scan(S), z)
+                S, lg, z = wm.step(S, a[:, j], ctx[:, j], self.wm_scan(S), z)
                 preds.append(S), logits.append(lg), zs.append(z)
             return tuple(torch.stack([P[i] for P in preds], 1) for i in range(6)), torch.stack(logits, 1), torch.stack(zs, 1)
 
@@ -217,7 +229,7 @@ class ParkourSuperMimicRunner:
             return mdp.critic_features(S, cmd, timers, xi_n)
 
         def _sim_stats(S, S1, a, a_prev, ctx, cmd, timers1, contact):
-            return wm.inputs(S, a, ctx, mdp.scan(S)), wm.targets(S, S1), mdp.reward(S, S1, a, a_prev, cmd, timers1, contact)
+            return wm.inputs(S, a, ctx, self.wm_scan(S)), wm.targets(S, S1), mdp.reward(S, S1, a, a_prev, cmd, timers1, contact)
 
         ac, policy_autocast, d0 = self.ac, self.cfg["policy_autocast"], self.depth_slice.start
         normalize = self.normalize_policy_obs
@@ -225,7 +237,7 @@ class ParkourSuperMimicRunner:
         def _imag_core(S, z, o_hist, amp_hist, timers, a_prev, cmd, xi, scan):
             """One imagination step: actor on the policy observation with the latent in place of the encoder output
             (stop-gradient), world-model step (z is a world-model state), feet timers, proprio and amp histories."""
-            obs = normalize(mdp.policy_obs(o_hist, z.new_zeros(z.shape[0], *DEPTH_SHAPE)))
+            obs = normalize(mdp.policy_obs(o_hist, z.new_zeros(z.shape[0], *self.perception_shape)))
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=policy_autocast):
                 a = ac.actor(torch.cat((obs[:, :d0], obs[:, d0 + self.depth_dim :], z.detach()), -1)).float()
             a = torch.clamp(a, -20, 20)
@@ -233,7 +245,7 @@ class ParkourSuperMimicRunner:
             timers1 = mdp.advance_feet_timers(timers, torch.sigmoid(logits[:, :2]))
             o_hist1 = torch.cat((o_hist[:, 1:], mdp.add_proprio_noise(mdp.proprio(S1, a, cmd)).unsqueeze(1)), 1)
             amp_hist1 = torch.cat((amp_hist[:, 1:], mdp.amp_frame(S1).unsqueeze(1)), 1)
-            return a, S1, z1, logits, timers1, o_hist1, amp_hist1, mdp.scan(S1)
+            return a, S1, z1, logits, timers1, o_hist1, amp_hist1, self.wm_scan(S1)
 
         if self.cfg["compile"]:
             _wm_rollout, _wm_err = (torch.compile(fn) for fn in (_wm_rollout, _wm_err))
@@ -261,7 +273,7 @@ class ParkourSuperMimicRunner:
             cmd, time_left = reader.command_params(), reader.command_time_left()
             lags, timers = reader.actuator_lags(), reader.feet_timers()
             ep_step = self.unwrapped.episode_length_buf.clone()
-            depth = self.obs[:, self.depth_slice].view(self.N, *DEPTH_SHAPE)
+            depth = self.obs[:, self.depth_slice].view(self.N, *self.perception_shape)
             if self.pol_norm is not None:
                 self.pol_norm.update(self.obs)
             a = self.ac.act_inference(self.normalize_policy_obs(self.obs))
@@ -274,10 +286,11 @@ class ParkourSuperMimicRunner:
             terminated = self.unwrapped.reset_terminated.clone()
             S1, contact, timers1 = reader.state(), reader.contact(), reader.feet_timers()
             r_sim = rew.sum(-1).clone() if rew.dim() > 1 else rew.clone()
-            depth1 = (obs1[:, self.depth_slice].view(self.N, *DEPTH_SHAPE) * DEPTH_SCALE).round().to(torch.uint8)
-            self.amp_ref[self.amp_ref_ptr] = infos["observations"]["amp_reference"].half()
-            self.amp_ref_ptr = (self.amp_ref_ptr + 1) % self.amp_ref.shape[0]
-            self.amp_ref_size = min(self.amp_ref_size + 1, self.amp_ref.shape[0])
+            depth1 = (obs1[:, self.depth_slice].view(self.N, *self.perception_shape) * DEPTH_SCALE).round().to(torch.uint8)
+            if self.style is not None:
+                self.amp_ref[self.amp_ref_ptr] = infos["observations"]["amp_reference"].half()
+                self.amp_ref_ptr = (self.amp_ref_ptr + 1) % self.amp_ref.shape[0]
+                self.amp_ref_size = min(self.amp_ref_size + 1, self.amp_ref.shape[0])
             done_ids = done.nonzero(as_tuple=False).squeeze(-1)
             self.obs = obs1
             if len(done_ids) > 0:
@@ -404,7 +417,7 @@ class ParkourSuperMimicRunner:
             z = self.encode_depth(s["depth"].float() / DEPTH_SCALE)
             o_hist, amp_hist = self.history(h)
         timers, a_prev = s["timers"], s["a_prev"]
-        S0, scan = S, self.mdp.scan(S)
+        S0, scan = S, self.wm_scan(S)
         Ss, S_prev, As, Aps, Ls, Ts, Amps = [], [], [], [], [], [], []
         for _ in range(HZ):
             S_prev.append(S), Aps.append(a_prev)
@@ -422,7 +435,7 @@ class ParkourSuperMimicRunner:
         c, mdp, dev = self.cfg, self.mdp, self.device
         B, HZ = c["pi_batch"], self.horizon
         s, h = self.sample_valid_starts(B)
-        frozen = (self.wm, self.critic, self.fail_head, self.style.discriminator)
+        frozen = (self.wm, self.critic, self.fail_head) + ((self.style.discriminator,) if self.style is not None else ())
         for m_ in frozen:
             for p_ in m_.parameters():
                 p_.requires_grad_(False)
@@ -434,7 +447,7 @@ class ParkourSuperMimicRunner:
         S_prev_all = tuple(flat([St[i] for St in im["S_prev"]]) for i in range(6))
         r, d, terms = self.reward_term(S_prev_all, S_all, flat(im["As"]), flat(im["Aps"]), rep(cmd), flat(im["Ts"]), flat(im["Ls"]))
         r = r + mdp.volume_points_penetration(S_all)
-        r_style = self.style.reward(mdp.amp_window(flat(im["Amps"])))
+        r_style = self.style.reward(mdp.amp_window(flat(im["Amps"]))) if self.style is not None else torch.zeros_like(r)
         r = r + r_style
         p_fail_mean = torch.zeros((), device=dev)
         if c["fail_head"] and self.it >= self.fail_head_start_it + c["fail_head_warmup_iters"]:
@@ -504,7 +517,7 @@ class ParkourSuperMimicRunner:
         ctx = self.wm_context(xi_w, w["a_prev"])
         S, z, out = unflatten_state(w["s"][:, 0]), z0, {}
         for j in range(self.horizon):
-            S, _, z = self.wm.step(S, w["a"][:, j], ctx[:, j], self.mdp.scan(S), z)
+            S, _, z = self.wm.step(S, w["a"][:, j], ctx[:, j], self.wm_scan(S), z)
             if j + 1 in steps:
                 m = w["mask"][:, j]
                 z_tgt = self.encode_depth(w["depth1"][:, j].float() / DEPTH_SCALE)
@@ -571,6 +584,9 @@ class ParkourSuperMimicRunner:
                     row.update(self.latent_gap())
                 for k, v in terms_acc.items():
                     row[f"imagination/reward_term/{k}"] = mean(v)
+                if c.get("wm_diagnostics_interval", 0) and self.it % c["wm_diagnostics_interval"] == 0:
+                    from .perception import perception_diagnostics
+                    row.update(perception_diagnostics(self))
                 self.latest_metrics = row
                 if self.log_dir is not None:
                     Path(self.log_dir, "status.json").write_text(json.dumps({
@@ -615,7 +631,7 @@ class ParkourSuperMimicRunner:
             "wm": self.wm.state_dict(), "latent_dec": self.latent_dec.state_dict(), "critic": self.critic.state_dict(),
             "opt_wm": self.opt_wm.state_dict(), "opt_v": self.opt_v.state_dict(), "iteration": self.it,
             "wall_time": self.wall_offset, "sim_steps": self.sim_steps, "cfg": self.cfg,
-            "fr_mean": self.fr_mean, "fr_std": self.fr_std, "style": self.style.state_dict(),
+            "fr_mean": self.fr_mean, "fr_std": self.fr_std, "style": self.style.state_dict() if self.style is not None else None,
             "fail_head": self.fail_head.state_dict(), "opt_fail": self.opt_fail.state_dict(), "fail_head_start_it": self.fail_head_start_it,
         }, self._sidecar(path))  # fmt: skip
         # Only rotate pairs explicitly recorded by this saver in this run directory.
@@ -665,7 +681,10 @@ class ParkourSuperMimicRunner:
         ck = torch.load(self._sidecar(path), map_location=self.device, weights_only=False)
         self.wm.load_state_dict(ck["wm"]), self.latent_dec.load_state_dict(ck["latent_dec"]), self.critic.load_state_dict(ck["critic"])
         self.opt_wm.load_state_dict(ck["opt_wm"]), self.opt_v.load_state_dict(ck["opt_v"])
-        self.style.load_state_dict(ck["style"])
+        if self.style is not None:
+            self.style.load_state_dict(ck["style"])
+        elif ck["style"] is not None:
+            raise ValueError("Cannot resume an AMP checkpoint as a fresh no-AMP experiment")
         self.fail_head.load_state_dict(ck["fail_head"]), self.opt_fail.load_state_dict(ck["opt_fail"])
         self.fail_head_start_it = ck["fail_head_start_it"]
         self.wall_offset, self.sim_steps = ck["wall_time"], ck["sim_steps"]

@@ -88,7 +88,8 @@ class ParkourMDP:
                 self.effort_limit[j] = float(abs(model.jnt_actfrcrange[int(robot.indexing.joint_ids[j])]).max())
         # ---- observation scales / noise (noise is applied BEFORE the scale in the env) ----
         pol = env.cfg.observations["policy"].terms
-        assert list(env.observation_manager.active_terms["policy"]) == [*PROPRIO_TERMS, "depth_image"]
+        perception = "height_image" if "height_image" in pol else "depth_image"
+        assert list(env.observation_manager.active_terms["policy"]) == [*PROPRIO_TERMS, perception]
         scale = torch.ones(PROPRIO_DIM, device=device)
         noise = torch.zeros(PROPRIO_DIM, device=device)
         for name, (a, b) in PROPRIO_TERMS.items():
@@ -99,9 +100,11 @@ class ParkourMDP:
                 assert term.noise.n_min == -term.noise.n_max
                 noise[a:b] = float(term.noise.n_max) * s_
         self.proprio_scale, self.proprio_noise = scale, noise
-        amp = env.cfg.observations["amp_policy"].terms
-        assert list(env.observation_manager.active_terms["amp_policy"]) == list(AMP_TERMS)
-        self.amp_vel_scale = 1.0 if amp["joint_vel"].scale is None else float(amp["joint_vel"].scale)
+        self.amp_vel_scale = 0.05
+        if "amp_policy" in env.cfg.observations:
+            amp = env.cfg.observations["amp_policy"].terms
+            assert list(env.observation_manager.active_terms["amp_policy"]) == list(AMP_TERMS)
+            self.amp_vel_scale = 1.0 if amp["joint_vel"].scale is None else float(amp["joint_vel"].scale)
         # ---- rewards ----
         self.w = {n: rm.get_term_cfg(n).weight for n in rm.active_terms["rewards"]}
         self.params = {n: rm.get_term_cfg(n).params for n in rm.active_terms["rewards"]}

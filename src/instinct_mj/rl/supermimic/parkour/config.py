@@ -13,6 +13,10 @@ class ParkourSuperMimicRunnerCfg(SuperMimicRunnerCfg):
     The ``style_*`` fields are the ``discriminator_*`` arguments of the task's PPO ``WasabiPPO`` config."""
 
     buffer_steps: int = 800
+    wm_use_privileged_scan: bool = True
+    """Legacy direct terrain input; disable to isolate the learned perception latent."""
+    wm_diagnostics_interval: int = 0
+    """Held-out physical-state prediction tests with intact/shuffled/mean perception."""
     """Replay buffer length in vectorized env steps (default 800; the depth stacks dominate the memory)."""
     keep_latest_checkpoints: int = 2
     """Retain this many recent policy/sidecar pairs plus the best training-score pair; 0 disables pruning."""

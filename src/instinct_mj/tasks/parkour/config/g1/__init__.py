@@ -45,6 +45,26 @@ register_instinct_task(
 PARKOUR_SUPERMIMIC_RUNNER_ENTRY_POINT = "instinct_mj.rl.supermimic.parkour.runner:ParkourSuperMimicRunner"
 
 
+def _perception_env(modality, play=False):
+    from .perception_cfg import perception_env_cfg
+    return perception_env_cfg(modality, play)
+
+
+def _perception_agent(modality):
+    from .perception_cfg import perception_agent_cfg
+    return perception_agent_cfg(modality)
+
+
+for _modality in ("depth", "height"):
+    register_instinct_task(
+        task_id=f"Instinct-Velocity-NoAmp-{_modality.title()}-SuperMimic-G1-v0",
+        env_cfg_factory=lambda modality=_modality: _perception_env(modality),
+        play_env_cfg_factory=lambda modality=_modality: _perception_env(modality, True),
+        instinct_rl_cfg_factory=lambda modality=_modality: _perception_agent(modality),
+        runner_entry_point=PARKOUR_SUPERMIMIC_RUNNER_ENTRY_POINT,
+    )
+
+
 def g1_parkour_supermimic_instinct_rl_cfg():
     from .rl_cfg import g1_parkour_supermimic_instinct_rl_cfg as _cfg
 
