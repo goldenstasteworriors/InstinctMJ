@@ -71,6 +71,9 @@ def main() -> None:
     end_pos = starts.clone()
     result, reasons = ["step_limit"] * n, [[] for _ in range(n)]
     contact_sum = torch.zeros(reader.num_contacts, device=dev)
+    flight, double_support, switches, vertical_sq, action_delta_sq = (steps.clone() for _ in range(5))
+    previous_feet = reader.contact()[:, :2] > 0.5
+    previous_action = reader.last_action()
     video = None
     if args.video is not None:
         from instinct_mj.scripts.supermimic.parkour_video import ParkourVideo
@@ -100,7 +103,15 @@ def main() -> None:
         yaw_sq += (wb[:, 2] - command[:, 2]).square() * active
         travel += (p[:, :2] - before[:, :2]).norm(dim=-1) * active
         end_pos[active] = p[active]
-        contact_sum += (reader.contact() * active[:, None]).sum(0)
+        contact = reader.contact()
+        feet = contact[:, :2] > 0.5
+        contact_sum += (contact * active[:, None]).sum(0)
+        flight += (~feet.any(-1)) * active
+        double_support += feet.all(-1) * active
+        switches += (feet != previous_feet).float().sum(-1) * active
+        vertical_sq += v[:, 2].square() * active
+        action_delta_sq += (action - previous_action).square().mean(-1) * active
+        previous_feet, previous_action = feet, action.clone()
         for i in torch.where(done & active)[0].tolist():
             terms = [name for name in env.termination_manager.active_terms if env.termination_manager.get_term(name)[i]]
             reasons[i] = terms
@@ -121,7 +132,12 @@ def main() -> None:
                 "termination_terms": reasons[i], "seconds": float(steps[i] * env.step_dt), "return": float(returns[i]),
                 "linear_velocity_rmse_mps": float((lin_sq[i] / steps[i].clamp_min(1)).sqrt()),
                 "yaw_velocity_rmse_radps": float((yaw_sq[i] / steps[i].clamp_min(1)).sqrt()),
-                "travel_xy_m": float(travel[i]), "displacement_xy_m": float((end_pos[i, :2] - starts[i, :2]).norm())}
+                "travel_xy_m": float(travel[i]), "displacement_xy_m": float((end_pos[i, :2] - starts[i, :2]).norm()),
+                "flight_fraction": float(flight[i] / steps[i].clamp_min(1)),
+                "double_support_fraction": float(double_support[i] / steps[i].clamp_min(1)),
+                "foot_contact_switches_per_second": float(switches[i] / (steps[i].clamp_min(1) * env.step_dt)),
+                "vertical_base_velocity_rms_mps": float((vertical_sq[i] / steps[i].clamp_min(1)).sqrt()),
+                "action_delta_rms": float((action_delta_sq[i] / steps[i].clamp_min(1)).sqrt())}
                for i in range(n)]
     iteration = runner.it if hasattr(runner, "it") else runner.current_learning_iteration
     summary = {"checkpoint": str(args.checkpoint), "iteration": iteration, "seed": args.seed, "episodes": n,
