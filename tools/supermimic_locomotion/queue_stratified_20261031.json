@@ -1,0 +1,44 @@
+{
+  "id": "depth_stratified_20261031",
+  "after_queue": "depth_repair_20261031",
+  "task": "Instinct-Velocity-NoAmp-Depth-SuperMimic-G1-v0",
+  "gpu_pool": [
+    2
+  ],
+  "max_gpu_used_mb": 2048,
+  "max_gpu_utilization": 35,
+  "iterations": 20000,
+  "num_envs": 1024,
+  "seed": 42,
+  "eval_seeds": [
+    1234,
+    2345,
+    3456
+  ],
+  "eval_envs": 128,
+  "eval_seconds": 20,
+  "eval_interventions": [
+    "intact",
+    "shuffled"
+  ],
+  "purpose": "Single-factor stratified holdout versus friction_only: same noAMP depth task, geometry weight0, observations, rewards, failure head and sampling. Every terrain represented in WM train/validation. Start after both existing depth runs and evaluations.",
+  "notes": [
+    "Fresh20k1024envseed42. Corrected per-world friction. No AMP or reference data in task.",
+    "WM input: state/action/previous action/delays/friction plus128D depth latent; direct privileged terrain scan OFF. Policy receives8consecutive depth frames. Critic/reward/failure retain privileged geometry. Geometry auxiliary weight0.",
+    "Fixed total102 heldout env identities stratified across10 terrain types; no changes to actor imagination sampling. No extra model input.",
+    "Torso contact>1N,tilt>1rad,height<0.5m are failures;20s and boundary truncated; post-reset window segments masked.",
+    "Policy evaluation intact/shuffled depth3seeds each, reported separately. Latest2checkpoint pairs plus training-score best. No claim of obstacle completion based on survival."
+  ],
+  "jobs": [
+    {
+      "id": "friction_stratified",
+      "amp": "none",
+      "flags": [
+        true,
+        0.25,
+        0.1
+      ],
+      "wm_stratified_holdout": true
+    }
+  ]
+}

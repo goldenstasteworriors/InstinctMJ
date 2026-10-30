@@ -8,6 +8,7 @@ import csv
 from datetime import datetime
 import fcntl
 import hashlib
+import itertools
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -64,6 +65,11 @@ def prepare(plan, folder):
     ids = [j["id"] for j in plan["jobs"]]
     if len(ids) != len(set(ids)) or any(j["amp"] not in ("walk", "run", "none") for j in plan["jobs"]):
         raise ValueError("Invalid queue jobs")
+    if any(not 0 <= j.get("critic_real_weight", 0.0) <= 1 for j in plan["jobs"]):
+        raise ValueError("Invalid real critic weight")
+    dependency = plan.get("after_queue")
+    if dependency is not None and (not dependency or Path(dependency).name != dependency or dependency in (".", "..", plan["id"])):
+        raise ValueError("Dependency must name a queue under the project log root")
     inventory = {}
     selection_root = DATA / plan["id"]
     selection_root.mkdir(parents=True, exist_ok=True)
@@ -95,6 +101,8 @@ def prepare(plan, folder):
                           "WM inputs remain state/action, depth latent, privileged terrain scan, delays/friction/previous action. Predicted contacts and analytic termination remain unchanged.",
                           "fail_head=False disables use in imagination, not failure-head fitting. holdout=0 is not held-out validation.",
                           "No scheduled chat notifications. No videos. Latest two checkpoint pairs plus training-proxy best retained."]}
+    if "notes" in plan:
+        manifest["notes"] = plan["notes"]
     write_json(folder / "manifest.json", manifest)
     write_json(folder / "state.json", {"status": "queued", "created_at": now(), "jobs": [dict(j, status="pending") for j in plan["jobs"]]})
     print(json.dumps({"queue": str(folder), "jobs": ids, "inventory": {k: len(v["files"]) for k, v in inventory.items()}}), flush=True)
@@ -104,7 +112,7 @@ def prepare(plan, folder):
 def training_command(plan, job, run_dir, checkpoint=None):
     flags = job["flags"]
     cmd = [sys.executable, "-u", "-m", "instinct_mj.scripts.supermimic.train_parkour",
-           "--task", TASK, "--num-envs", str(plan["num_envs"]), "--device", "cuda:0", "--log-dir", str(run_dir),
+           "--task", plan.get("task", TASK), "--num-envs", str(plan["num_envs"]), "--device", "cuda:0", "--log-dir", str(run_dir),
            "--agent.seed", str(plan["seed"]), "--agent.run-name", run_dir.name,
            "--agent.max-iterations", str(plan["iterations"]), "--agent.save-interval", "500",
            "--agent.heightmap-cache-dir", os.environ["INSTINCT_HEIGHTMAP_CACHE"],
@@ -112,6 +120,10 @@ def training_command(plan, job, run_dir, checkpoint=None):
            "--agent.wm-holdout-envs", str(flags[2]),
            "--agent.style-reward-coef", "0" if job["amp"] == "none" else "0.25",
            "--agent.style-minibatches", "0" if job["amp"] == "none" else "2"]
+    if job.get("critic_real_weight", 0.0):
+        cmd += ["--agent.critic-real-weight", str(job["critic_real_weight"])]
+    if job.get("wm_stratified_holdout", False):
+        cmd += ["--agent.wm-stratified-holdout", "True", "--agent.wm-holdout-seed", str(plan["seed"])]
     if checkpoint is not None:
         cmd += ["--agent.load-run", str(run_dir), "--agent.load-checkpoint", checkpoint]
     return cmd
@@ -163,17 +175,19 @@ def aggregate(folder, state):
     for job in state["jobs"]:
         if job["status"] != "completed":
             continue
-        records = []
+        groups = {}
         for path in job["evaluations"]:
-            records += read_json(path)["records"]
-        seconds = sum(r["seconds"] for r in records)
-        rows.append({"job": job["id"], "run": job["run_name"], "episodes": len(records),
-                     "survival_fraction": sum(r["result"] == "survived_horizon" for r in records) / len(records),
-                     "mean_seconds": seconds / len(records),
-                     "linear_velocity_rmse_mps": math.sqrt(sum(r["linear_velocity_rmse_mps"]**2 * r["seconds"] for r in records) / seconds),
-                     "yaw_velocity_rmse_radps": math.sqrt(sum(r["yaw_velocity_rmse_radps"]**2 * r["seconds"] for r in records) / seconds),
-                     "mean_travel_m": sum(r["travel_xy_m"] for r in records) / len(records),
-                     "mean_displacement_m": sum(r["displacement_xy_m"] for r in records) / len(records)})
+            result = read_json(path)
+            groups.setdefault(result.get("perception_intervention", "intact"), []).extend(result["records"])
+        for intervention, records in groups.items():
+            seconds = sum(r["seconds"] for r in records)
+            rows.append({"job": job["id"], "run": job["run_name"], "perception_intervention": intervention, "episodes": len(records),
+                         "survival_fraction": sum(r["result"] == "survived_horizon" for r in records) / len(records),
+                         "mean_seconds": seconds / len(records),
+                         "linear_velocity_rmse_mps": math.sqrt(sum(r["linear_velocity_rmse_mps"]**2 * r["seconds"] for r in records) / seconds),
+                         "yaw_velocity_rmse_radps": math.sqrt(sum(r["yaw_velocity_rmse_radps"]**2 * r["seconds"] for r in records) / seconds),
+                         "mean_travel_m": sum(r["travel_xy_m"] for r in records) / len(records),
+                         "mean_displacement_m": sum(r["displacement_xy_m"] for r in records) / len(records)})
     write_json(folder / "comparison.json", rows)
     if rows:
         with (folder / "comparison.csv").open("w", newline="") as stream:
@@ -187,6 +201,26 @@ def work(plan, folder, manifest):
     with (RUNTIME / (plan["id"] + ".lock")).open("a") as worker_lock:
         fcntl.flock(worker_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = read_json(folder / "state.json")
+        if plan.get("after_queue") and any(j["status"] != "completed" for j in state["jobs"]):
+            dependency = LOGS / plan["after_queue"] / "state.json"
+            state.update(status="waiting_for_dependency", dependency=str(dependency), updated_at=now())
+            write_json(folder / "state.json", state)
+            while True:
+                try:
+                    parent = read_json(dependency) if dependency.exists() else {}
+                except (OSError, json.JSONDecodeError) as error:
+                    # BOSFS can transiently reject reads of an actively replaced
+                    # status file. Observation failure is not parent failure.
+                    print(f"Dependency observation unavailable; retrying: {error}", flush=True)
+                    time.sleep(30)
+                    continue
+                if parent.get("status") == "completed":
+                    break
+                if parent.get("status") == "failed":
+                    state.update(status="failed", error="Dependency failed; no training started", updated_at=now())
+                    write_json(folder / "state.json", state)
+                    raise RuntimeError(state["error"])
+                time.sleep(30)
         for job in state["jobs"]:
             if job["status"] == "completed":
                 continue
@@ -225,12 +259,13 @@ def work(plan, folder, manifest):
                 write_json(folder / "state.json", state)
                 # Common reference plumbing gives every policy the same evaluation setup.
                 env["INSTINCT_PARKOUR_SELECTION"] = str(DATA / "selection.yaml")
-                for seed in plan["eval_seeds"]:
-                    output = folder / "evaluations" / f"{job['id']}_seed{seed}.json"
+                for intervention, seed in itertools.product(plan.get("eval_interventions", ["intact"]), plan["eval_seeds"]):
+                    output = folder / "evaluations" / f"{job['id']}_{intervention}_seed{seed}.json"
                     if not output.exists():
-                        cmd = [sys.executable, "-u", "-m", "instinct_mj.scripts.supermimic.evaluate_parkour", "--checkpoint", str(target),
-                               "--output", str(output), "--num-envs", str(plan["eval_envs"]), "--seconds", str(plan["eval_seconds"]), "--seed", str(seed)]
-                        stage(cmd, env, folder / "logs" / f"{job['id']}_eval{seed}.log", gpu_lock)
+                        cmd = [sys.executable, "-u", "-m", "instinct_mj.scripts.supermimic.evaluate_parkour", "--task", plan.get("task", TASK), "--checkpoint", str(target),
+                               "--output", str(output), "--num-envs", str(plan["eval_envs"]), "--seconds", str(plan["eval_seconds"]), "--seed", str(seed),
+                               "--perception-intervention", intervention]
+                        stage(cmd, env, folder / "logs" / f"{job['id']}_{intervention}_eval{seed}.log", gpu_lock)
                     result = read_json(output)
                     if result["iteration"] != plan["iterations"] or result["episodes"] != plan["eval_envs"] or result["seed"] != seed or result["checkpoint"] != str(target):
                         raise RuntimeError("Evaluation provenance mismatch")
