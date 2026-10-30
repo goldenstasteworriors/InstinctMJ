@@ -29,6 +29,8 @@ def main():
     p.add_argument("--seed", default=1234, type=int)
     p.add_argument("--windows", default=16, type=int)
     p.add_argument("--horizon", default=32, type=int)
+    p.add_argument("--audit-real-rewards", action="store_true",
+                   help="Compare analytic and cached native rewards on identical real transitions")
     p.add_argument("--friction", choices=("task", "training"), default="task",
                    help="training fixes simulator friction to the checkpoint mean, isolating dynamics from unseen friction")
     args = p.parse_args()
@@ -72,13 +74,57 @@ def main():
     # Ignore startup/backfilled histories: only compare complete windows collected
     # by both paths in this evaluation, before any reset modifies observations.
     amp_age = torch.zeros(args.num_envs, dtype=torch.long, device=obs.device)
+    reward_parity = {}
+
+    def record_reward(name, predicted, native, mask):
+        predicted, native = predicted[mask].double(), native[mask].double()
+        if not torch.isfinite(predicted).all() or not torch.isfinite(native).all():
+            raise FloatingPointError(name)
+        error = predicted - native
+        row = reward_parity.setdefault(name, dict(count=0, analytic_sum=0.0, native_sum=0.0,
+                                                 error_sum=0.0, squared_error_sum=0.0))
+        row["count"] += error.numel()
+        for key, value in (("analytic_sum", predicted.sum()), ("native_sum", native.sum()),
+                           ("error_sum", error.sum()), ("squared_error_sum", error.square().sum())):
+            row[key] += float(value)
 
     def real_step(action):
         nonlocal obs, amp_hist
+        if args.audit_real_rewards:
+            before, previous_action = reader.state(), reader.last_action()
+            command = reader.command_params()
+            mature_reward = amp_age >= AMP_HIST
         obs1, reward, done, infos = vec.step(action)
         state = reader.state()
         real_timers = reader.feet_timers()
         contact, terminated = reader.contact(), env.reset_terminated.clone()
+        if args.audit_real_rewards:
+            _, analytic = mdp.reward(before, state, action, previous_action, command,
+                                     real_timers, contact, terms=True)
+            analytic["is_alive"] = analytic["is_alive"] * (~terminated)
+            analytic["volume_points_penetration"] = mdp.volume_points_penetration(state)
+            scale = env.step_dt if env.reward_manager.scale_rewards_by_dt else 1.0
+            native = {}
+            for group in env.reward_manager._termwise_reward_buf.values():
+                for name, value in group.items():
+                    if name in native:
+                        raise ValueError(f"Ambiguous reward name: {name}")
+                    native[name] = value * scale
+            if set(native) != set(analytic):
+                raise ValueError(f"Reward terms differ: {set(native) ^ set(analytic)}")
+            total_native, total_analytic = sum(native.values()), sum(analytic.values())
+            if not torch.allclose(total_native, reward.sum(-1), atol=1e-5, rtol=1e-5):
+                raise ValueError("Native cached reward sum mismatch")
+            for name in native:
+                record_reward(name, analytic[name], native[name], mature_reward)
+            record_reward("TOTAL", total_analytic, total_native, mature_reward)
+            # Isolate contact-definition mismatch without changing any production reward.
+            instant_contact = contact.clone()
+            instant_contact[:, :2] = (real_timers[:, 2:] > 0).float()
+            _, alternate = mdp.reward(before, state, action, previous_action, command,
+                                     real_timers, instant_contact, terms=True)
+            record_reward("feet_air_time_current_timer_contact", alternate["feet_air_time"],
+                          native["feet_air_time"], mature_reward)
         amp_hist = torch.cat((amp_hist[:, 1:], mdp.amp_frame(state).unsqueeze(1)), 1)
         style = runner.style.reward(mdp.amp_window(amp_hist)) if runner.style else torch.zeros_like(reward.sum(-1))
         amp_age.add_(1)
@@ -203,6 +249,7 @@ def main():
                                   "undesired": reader.undesired_threshold},
         "trained_horizon": agent["horizon"], "evaluated_horizon": args.horizon,
         "wm_direct_terrain_scan": agent.get("wm_use_privileged_scan", True),
+        "real_reward_parity": reward_parity if args.audit_real_rewards else None,
         "amp_native_reconstruction_parity": amp_parity if runner.style is not None else None,
         "reward_units": "weighted reward per 0.02-second control step, including penetration and style separately",
         "records": rows}, indent=2))
