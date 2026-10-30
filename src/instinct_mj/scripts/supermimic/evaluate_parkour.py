@@ -14,6 +14,7 @@ from pathlib import Path
 
 import torch
 from instinct_rl.runners import OnPolicyRunner
+from mujoco_warp._src.types import OverflowType
 
 import instinct_mj.tasks  # noqa: F401
 from instinct_mj.rl.supermimic.parkour.sim import ParkourSimReader
@@ -103,6 +104,11 @@ def main() -> None:
     flight, double_support, switches, vertical_sq, action_delta_sq = (steps.clone() for _ in range(5))
     previous_feet = reader.contact()[:, :2] > 0.5
     previous_action = reader.last_action()
+    # Warp's overflow flags persist until the simulator data is reset. Observe
+    # them without clearing them or changing collision buffers/physics settings.
+    hfield_first_step = torch.full((n,), -1, dtype=torch.int64, device=dev)
+    initial_overflow = env.sim.data.overflow.to(dtype=torch.int64)
+    hfield_first_step[(initial_overflow & int(OverflowType.HFIELD)) != 0] = 0
     video = None
     if args.video is not None:
         from instinct_mj.scripts.supermimic.parkour_video import ParkourVideo
@@ -125,6 +131,8 @@ def main() -> None:
             raise FloatingPointError("Nonfinite evaluation action")
         obs1, reward, dones, _ = vec.step(action)
         done = dones.bool()
+        hfield_hit = (env.sim.data.overflow.to(dtype=torch.int64) & int(OverflowType.HFIELD)) != 0
+        hfield_first_step[active & hfield_hit & (hfield_first_step < 0)] = step
         p, R, v, w, _, _ = reader.state()
         if not all(torch.isfinite(x[active]).all() for x in (p, R, v, w, reward)):
             raise FloatingPointError("Nonfinite evaluation state or reward")
@@ -173,6 +181,9 @@ def main() -> None:
                 "vertical_base_velocity_rms_mps": float((vertical_sq[i] / steps[i].clamp_min(1)).sqrt()),
                 "action_delta_rms": float((action_delta_sq[i] / steps[i].clamp_min(1)).sqrt())}
                for i in range(n)]
+    for i, record in enumerate(records):
+        record["hfield_collision_overflow_seen"] = bool(hfield_first_step[i] >= 0)
+        record["hfield_collision_overflow_first_time_s"] = float(hfield_first_step[i] * env.step_dt) if hfield_first_step[i] >= 0 else None
     iteration = runner.it if hasattr(runner, "it") else runner.current_learning_iteration
     summary = {"checkpoint": str(args.checkpoint), "iteration": iteration, "seed": args.seed, "episodes": n,
                "task": args.task, "perception_intervention": args.perception_intervention,
@@ -180,6 +191,7 @@ def main() -> None:
                "initial_terrain_level_max": cfg.scene.terrain.max_init_terrain_level,
                "feet_contact_threshold_N": reader.feet_threshold,
                "controlled_friction_coefficient": args.friction_coefficient,
+               "episodes_with_hfield_collision_overflow": int((hfield_first_step >= 0).sum()),
                "protocol": "First episode; training randomization/terminations; pre-reset metrics; no curriculum updates",
                "survived_horizon": result.count("survived_horizon"), "failed": result.count("failure"),
                "censored": sum(x not in ("failure", "survived_horizon") for x in result),
