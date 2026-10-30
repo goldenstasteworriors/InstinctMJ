@@ -142,6 +142,11 @@ class ParkourSuperMimicRunner:
                            else PerceptionDecoder(self.z_dim, self.perception_shape)).to(device)
         self.critic = Critic(self.mdp.critic_dim).to(device)
         self.wm_params = [*self.wm.parameters(), *self.enc.parameters(), *self.latent_dec.parameters()]
+        self.geometry_dec = None
+        if c.get("perception_geometry_weight", 0.0) > 0:
+            self.geometry_dec = nn.Sequential(nn.Linear(self.z_dim, 256), nn.ELU(),
+                                              nn.Linear(256, self.scanner.num_rays), nn.Sigmoid()).to(device)
+            self.wm_params += list(self.geometry_dec.parameters())
         self.opt_wm = torch.optim.Adam(self.wm_params, lr=c["lr"])
         self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=c["lr"])
         self.fail_head = FailureHead(self.mdp.critic_dim).to(device)
@@ -336,8 +341,18 @@ class ParkourSuperMimicRunner:
         latent_loss = (lz * mask).sum() / Bz
         Br = min(c["latent_recon_images"], Bz * k)
         stack = w["depth1"][:Bz].flatten(0, 1)[:Br].float() / DEPTH_SCALE
-        recon = (self.latent_dec(self.encode_depth(stack)) - stack).abs().mean()
-        total = loss + c["latent_weight"] * latent_loss + c["latent_recon_weight"] * recon
+        encoded = self.encode_depth(stack)
+        recon = (self.latent_dec(encoded) - stack).abs().mean()
+        geometry = recon.new_zeros(())
+        if self.geometry_dec is not None:
+            # Same pre-reset instant as depth1; yaw-aligned root-to-ground distances.
+            # Privileged simulator geometry is a training label, never an actor input.
+            with torch.no_grad():
+                target = self.mdp.scan(unflatten_state(w["s1"][:Bz].flatten(0, 1)[:Br])).clamp(0, 2.5) / 2.5
+            valid = w["mask"][:Bz].flatten()[:Br]
+            error = (self.geometry_dec(encoded) - target).abs().mean(-1)
+            geometry = (error * valid).sum() / valid.sum().clamp(min=1)
+        total = loss + c["latent_weight"] * latent_loss + c["latent_recon_weight"] * recon + c.get("perception_geometry_weight", 0.0) * geometry
         self.opt_wm.zero_grad(set_to_none=True)
         total.backward()
         nn.utils.clip_grad_norm_(self.wm_params, 1.0)
@@ -366,6 +381,7 @@ class ParkourSuperMimicRunner:
             "latent": (lz.detach() * mask).sum() / mask.sum().clamp(min=1),
             "latent_k": (lz.detach()[:, -1] * mask[:, -1]).sum() / mask[:, -1].sum().clamp(min=1), "recon": recon.detach(),
             "fail_loss": fail_loss.detach() / 2,
+            "geometry": geometry.detach() * 2.5,
         }  # fmt: skip
 
     def history(self, h: dict):
@@ -538,7 +554,7 @@ class ParkourSuperMimicRunner:
         t_start = time.time() - self.wall_offset
         t_log = time.time()
         step_acc = 0.0
-        keys = ("wm", "wm8", "bce", "latent", "latent_k", "recon", "fail_loss", "pi", "v", "ir", "gn", "surv", "d_policy", "d_reference")
+        keys = ("wm", "wm8", "bce", "latent", "latent_k", "recon", "geometry", "fail_loss", "pi", "v", "ir", "gn", "surv", "d_policy", "d_reference")
         agg: dict[str, list] = {k: [] for k in keys}
         terms_acc: dict[str, list] = {}
         while self.it < num_learning_iterations:
@@ -552,7 +568,7 @@ class ParkourSuperMimicRunner:
             self.collect(n, stats)
             for _ in range(c["wm_batches"]):
                 m = self.wm_update()
-            for k_ in ("wm", "wm8", "bce", "latent", "latent_k", "recon", "fail_loss"):
+            for k_ in ("wm", "wm8", "bce", "latent", "latent_k", "recon", "geometry", "fail_loss"):
                 agg[k_].append(m[k_])
             sm = self.style_update()
             if sm:
@@ -571,6 +587,7 @@ class ParkourSuperMimicRunner:
                 row = {
                     "wm/loss": mean(agg["wm"]), "wm/err_8step": mean(agg["wm8"]), "wm/contact_bce": mean(agg["bce"]),
                     "latent/err_window": mean(agg["latent"]), "latent/err_8step": mean(agg["latent_k"]), "latent/recon_l1": mean(agg["recon"]),
+                    "perception/geometry_mae_m_train": mean(agg["geometry"]),
                     "fail/bce_train": mean(agg["fail_loss"]), "style/d_policy": mean(agg["d_policy"]), "style/d_reference": mean(agg["d_reference"]),
                     "policy/loss": mean(agg["pi"]), "policy/grad_norm": mean(agg["gn"]), "critic/value_loss": mean(agg["v"]),
                     "imagination/reward": mean(agg["ir"]), "imagination/survival": mean(agg["surv"]),
@@ -629,6 +646,7 @@ class ParkourSuperMimicRunner:
         torch.save(run_state_dict, path)
         torch.save({
             "wm": self.wm.state_dict(), "latent_dec": self.latent_dec.state_dict(), "critic": self.critic.state_dict(),
+            "geometry_dec": self.geometry_dec.state_dict() if self.geometry_dec is not None else None,
             "opt_wm": self.opt_wm.state_dict(), "opt_v": self.opt_v.state_dict(), "iteration": self.it,
             "wall_time": self.wall_offset, "sim_steps": self.sim_steps, "cfg": self.cfg,
             "fr_mean": self.fr_mean, "fr_std": self.fr_std, "style": self.style.state_dict() if self.style is not None else None,
@@ -680,6 +698,12 @@ class ParkourSuperMimicRunner:
     def _load_sidecar(self, path: str) -> None:
         ck = torch.load(self._sidecar(path), map_location=self.device, weights_only=False)
         self.wm.load_state_dict(ck["wm"]), self.latent_dec.load_state_dict(ck["latent_dec"]), self.critic.load_state_dict(ck["critic"])
+        if self.geometry_dec is not None:
+            if ck.get("geometry_dec") is None:
+                raise ValueError("Geometry supervision requires a fresh run or a matching checkpoint")
+            self.geometry_dec.load_state_dict(ck["geometry_dec"])
+        elif ck.get("geometry_dec") is not None:
+            raise ValueError("Checkpoint requires perception_geometry_weight > 0")
         self.opt_wm.load_state_dict(ck["opt_wm"]), self.opt_v.load_state_dict(ck["opt_v"])
         if self.style is not None:
             self.style.load_state_dict(ck["style"])

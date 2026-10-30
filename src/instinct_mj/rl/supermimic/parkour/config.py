@@ -16,6 +16,8 @@ class ParkourSuperMimicRunnerCfg(SuperMimicRunnerCfg):
     wm_use_privileged_scan: bool = True
     """Legacy direct terrain input; disable to isolate the learned perception latent."""
     wm_diagnostics_interval: int = 0
+    perception_geometry_weight: float = 0.0
+    """Train-only local terrain supervision of the visual encoder; no extra policy/WM input."""
     """Held-out physical-state prediction tests with intact/shuffled/mean perception."""
     """Replay buffer length in vectorized env steps (default 800; the depth stacks dominate the memory)."""
     keep_latest_checkpoints: int = 2
