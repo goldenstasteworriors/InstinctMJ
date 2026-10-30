@@ -52,6 +52,15 @@ def main() -> None:
     policy = runner.get_inference_policy()
     reader = ParkourSimReader(env)
     obs, _ = vec.get_observations()
+    offset = 0
+    for name, shape in vec.get_obs_format()["policy"].items():
+        size = math.prod(shape)
+        if name in ("depth_image", "height_image"):
+            visual_slice = slice(offset, offset + size)
+            break
+        offset += size
+    else:
+        raise ValueError("Task has no perception observation")
     n, dev = args.num_envs, env.device
     active = torch.ones(n, dtype=torch.bool, device=dev)
     steps = torch.zeros(n, device=dev)
@@ -73,8 +82,8 @@ def main() -> None:
         policy_obs = obs
         if args.perception_intervention != "intact":
             policy_obs = obs.clone()
-            visual = obs[:, runner.depth_slice]
-            policy_obs[:, runner.depth_slice] = visual.roll(1, 0) if args.perception_intervention == "shuffled" else visual.mean(0, keepdim=True)
+            visual = obs[:, visual_slice]
+            policy_obs[:, visual_slice] = visual.roll(1, 0) if args.perception_intervention == "shuffled" else visual.mean(0, keepdim=True)
         action = policy(policy_obs)
         if not torch.isfinite(action).all():
             raise FloatingPointError("Nonfinite evaluation action")
@@ -114,7 +123,8 @@ def main() -> None:
                 "yaw_velocity_rmse_radps": float((yaw_sq[i] / steps[i].clamp_min(1)).sqrt()),
                 "travel_xy_m": float(travel[i]), "displacement_xy_m": float((end_pos[i, :2] - starts[i, :2]).norm())}
                for i in range(n)]
-    summary = {"checkpoint": str(args.checkpoint), "iteration": runner.it, "seed": args.seed, "episodes": n,
+    iteration = runner.it if hasattr(runner, "it") else runner.current_learning_iteration
+    summary = {"checkpoint": str(args.checkpoint), "iteration": iteration, "seed": args.seed, "episodes": n,
                "task": args.task, "perception_intervention": args.perception_intervention,
                "protocol": "First episode; training randomization/terminations; pre-reset metrics; no curriculum updates",
                "survived_horizon": result.count("survived_horizon"), "failed": result.count("failure"),
