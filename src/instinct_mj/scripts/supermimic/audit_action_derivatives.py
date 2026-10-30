@@ -8,10 +8,12 @@ Repeated unperturbed steps must agree before any derivative result is accepted.
 """
 
 import argparse
+import dataclasses
 import json
 from pathlib import Path
 
 import torch
+import warp as wp
 
 import instinct_mj.tasks  # noqa: F401
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls, load_instinct_rl_cfg, load_runner_cls, load_vecenv_cls
@@ -58,14 +60,23 @@ def main():
     policy = runner.get_inference_policy()
     for parameter in wm.parameters():
         parameter.requires_grad_(False)
-    fields = ("qpos", "qvel", "act", "qacc_warmstart", "ctrl", "qfrc_applied",
-              "xfrc_applied", "mocap_pos", "mocap_quat", "time")
-    # All fields are required; silently skipping integration state is unsafe.
-    for field in fields:
-        # WarpBridge exposes tensor proxies; clone resolves the underlying
-        # tensor without assuming its wrapper inherits torch.Tensor.
-        if not isinstance(getattr(env.sim.data, field).clone(), torch.Tensor):
-            raise TypeError(field)
+    def arrays(value, prefix=""):
+        for field in dataclasses.fields(value):
+            child = getattr(value, field.name)
+            name = prefix + field.name
+            if isinstance(child, wp.array):
+                yield name, child
+            elif dataclasses.is_dataclass(child):
+                yield from arrays(child, name + ".")
+    # Include collision and solver workspace: restoring only qpos/qvel and the
+    # warm start did not pass the numerical repeatability gate on this backend.
+    data_arrays = dict(arrays(env.sim.data.struct))
+    if not {"qpos", "qvel", "qacc_warmstart"}.issubset(data_arrays):
+        raise RuntimeError("Incomplete simulator state inventory")
+    snapshot_bytes = sum(value.capacity for value in data_arrays.values())
+    if snapshot_bytes > 4 * 1024**3:
+        raise RuntimeError(f"Diagnostic snapshot exceeds 4 GiB: {snapshot_bytes}")
+    snapshot = {name: wp.clone(value) for name, value in data_arrays.items()}
     records, repeatability = [], []
     for window in range(args.windows):
         env.reset()
@@ -92,7 +103,10 @@ def main():
             z = runner.encode_depth(obs[:, runner.depth_slice].view(args.num_envs, *runner.perception_shape))
             scan = runner.wm_scan(S)
             initial_contact = reader.contact()[:, :2].clone()
-            snapshot = {field: getattr(env.sim.data, field).clone() for field in fields}
+            torch.cuda.synchronize()
+            for name, value in data_arrays.items():
+                wp.copy(snapshot[name], value)
+            wp.synchronize()
             direction = torch.randn_like(a)
             direction /= direction.norm(dim=-1, keepdim=True)
         # Express outputs in the fixed initial root frame, avoiding derivative
@@ -102,11 +116,10 @@ def main():
 
         @torch.no_grad()
         def physical(action):
-            for field, value in snapshot.items():
-                getattr(env.sim.data, field).copy_(value)
-            env.sim.forward()
-            # forward updates solver state; restore its original warm start.
-            env.sim.data.qacc_warmstart.copy_(snapshot["qacc_warmstart"])
+            torch.cuda.synchronize()
+            for name, value in data_arrays.items():
+                wp.copy(value, snapshot[name])
+            wp.synchronize()
             env.action_manager.process_action(action)
             for _ in range(env.cfg.decimation):
                 env.action_manager.apply_action()
@@ -145,7 +158,8 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(protocol=__doc__, checkpoint=str(args.checkpoint),
         task=args.task, seed=args.seed, friction=mu, actuator_delay_steps=0,
-        dt=env.step_dt, restored_fields=fields, repeatability_velocity_absmax=repeatability,
+        dt=env.step_dt, restored_fields=list(data_arrays), snapshot_bytes=snapshot_bytes,
+        repeatability_velocity_absmax=repeatability,
         records=records), indent=2))
     env.close()
 
