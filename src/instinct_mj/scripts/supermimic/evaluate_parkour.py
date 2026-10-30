@@ -32,18 +32,35 @@ def main() -> None:
     parser.add_argument("--num-envs", default=128, type=int)
     parser.add_argument("--seconds", default=20.0, type=float)
     parser.add_argument("--seed", default=1234, type=int)
+    parser.add_argument("--command-mode", choices=("task", "forward"), default="task")
+    parser.add_argument("--forward-speed", default=0.6, type=float)
+    parser.add_argument("--initial-terrain-level", type=int,
+                        help="Optional maximum initial level, e.g. 0 for a separate easy-terrain gait probe")
     parser.add_argument("--video", type=Path, help="Optional four-view MP4; first episodes freeze at termination.")
     parser.add_argument("--video-envs", nargs=4, type=int, default=[0, 32, 64, 96])
     parser.add_argument("--video-label", default="SuperMimic locomotion")
     args = parser.parse_args()
     if args.num_envs < 2 or args.seconds <= 0:
         raise ValueError("Evaluation requires at least two environments and positive seconds")
+    if args.output.exists() or (args.video is not None and args.video.exists()):
+        raise FileExistsError("Refusing to overwrite an existing evaluation artifact")
+    if args.forward_speed <= 0 or (args.initial_terrain_level is not None and args.initial_terrain_level < 0):
+        raise ValueError("Invalid forward speed or terrain level")
     torch.set_num_threads(8)
     torch.manual_seed(args.seed)
     cfg = load_env_cfg(args.task)
     cfg.seed, cfg.scene.num_envs = args.seed, args.num_envs
     cfg.auto_reset, cfg.monitors, cfg.curriculum = False, {}, {}
     cfg.episode_length_s = args.seconds
+    if args.initial_terrain_level is not None:
+        cfg.scene.terrain.max_init_terrain_level = args.initial_terrain_level
+    if args.command_mode == "forward":
+        command_cfg = cfg.commands["base_velocity"]
+        command_cfg.random_velocity_terrain = list(cfg.scene.terrain.terrain_generator.sub_terrains)
+        command_cfg.rel_standing_envs = 0.0
+        command_cfg.ranges.lin_vel_x = (args.forward_speed, args.forward_speed)
+        command_cfg.ranges.lin_vel_y = (0.0, 0.0)
+        command_cfg.ranges.ang_vel_z = (0.0, 0.0)
     env = load_env_cls(args.task)(cfg, device="cuda:0")
     vec = load_vecenv_cls(args.task)(env, policy_group="policy", critic_group="critic")
     runner_cls = load_runner_cls(args.task) or OnPolicyRunner
@@ -68,6 +85,8 @@ def main() -> None:
     levels = env.scene.terrain.terrain_levels.clone()
     kinds = env.scene.terrain.terrain_types.clone()
     starts = reader.state()[0].clone()
+    initial_heading = reader.state()[1][:, :2, 0].clone()
+    initial_heading /= initial_heading.norm(dim=-1, keepdim=True).clamp_min(1e-6)
     end_pos = starts.clone()
     result, reasons = ["step_limit"] * n, [[] for _ in range(n)]
     contact_sum = torch.zeros(reader.num_contacts, device=dev)
@@ -81,6 +100,10 @@ def main() -> None:
         video = ParkourVideo(env, args.video, args.video_envs, args.video_label, levels, kinds)
     for step in range(1, math.ceil(args.seconds / env.step_dt) + 2):
         command = reader.command.command.clone()
+        if args.command_mode == "forward":
+            expected = command.new_tensor([args.forward_speed, 0, 0]).expand_as(command[active])
+            if not torch.allclose(command[active], expected, atol=1e-6):
+                raise ValueError("Actual command differs from the requested controlled forward probe")
         before = reader.state()[0]
         policy_obs = obs
         if args.perception_intervention != "intact":
@@ -133,6 +156,7 @@ def main() -> None:
                 "linear_velocity_rmse_mps": float((lin_sq[i] / steps[i].clamp_min(1)).sqrt()),
                 "yaw_velocity_rmse_radps": float((yaw_sq[i] / steps[i].clamp_min(1)).sqrt()),
                 "travel_xy_m": float(travel[i]), "displacement_xy_m": float((end_pos[i, :2] - starts[i, :2]).norm()),
+                "progress_along_initial_heading_m": float(((end_pos[i, :2] - starts[i, :2]) * initial_heading[i]).sum()),
                 "flight_fraction": float(flight[i] / steps[i].clamp_min(1)),
                 "double_support_fraction": float(double_support[i] / steps[i].clamp_min(1)),
                 "foot_contact_switches_per_second": float(switches[i] / (steps[i].clamp_min(1) * env.step_dt)),
@@ -142,6 +166,9 @@ def main() -> None:
     iteration = runner.it if hasattr(runner, "it") else runner.current_learning_iteration
     summary = {"checkpoint": str(args.checkpoint), "iteration": iteration, "seed": args.seed, "episodes": n,
                "task": args.task, "perception_intervention": args.perception_intervention,
+               "command_mode": args.command_mode, "forward_speed_mps": args.forward_speed if args.command_mode == "forward" else None,
+               "initial_terrain_level_max": cfg.scene.terrain.max_init_terrain_level,
+               "feet_contact_threshold_N": reader.feet_threshold,
                "protocol": "First episode; training randomization/terminations; pre-reset metrics; no curriculum updates",
                "survived_horizon": result.count("survived_horizon"), "failed": result.count("failure"),
                "censored": sum(x not in ("failure", "survived_horizon") for x in result),
