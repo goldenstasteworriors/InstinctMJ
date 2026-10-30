@@ -104,7 +104,6 @@ def main():
         alive = eligible.clone()
         predicted_survival = torch.ones(args.num_envs, device=env.device)
         real_survival = torch.ones_like(predicted_survival)
-        sim_return, model_return = torch.zeros_like(real_survival), torch.zeros_like(real_survival)
         scan = runner.wm_scan(S)
         if window == 0:
             actor_a = policy(obs)
@@ -121,8 +120,9 @@ def main():
             S0, ap = S, a_prev
             a_prev, S, z, logits, timers, o_hist, amp_im, scan = runner.imag_core(S, z, o_hist, amp_im, timers, a_prev, cmd, xi, scan)
             model_r, d, _ = runner.reward_term(S0, S, a_prev, ap, cmd, timers, logits)
+            model_r = model_r + mdp.volume_points_penetration(S)
             model_style = runner.style.reward(mdp.amp_window(amp_im)) if runner.style else torch.zeros_like(model_r)
-            if agent["fail_head"]:
+            if agent["fail_head"] and runner.it >= runner.fail_head_start_it + agent["fail_head_warmup_iters"]:
                 pf = runner.fail_head(runner.critic_input(S, cmd, timers, xi)).sigmoid().clamp(max=agent["fail_clip"])
                 d = 1 - (1 - d) * (1 - pf.squeeze(-1))
             predicted_survival *= 1 - d
@@ -133,8 +133,6 @@ def main():
             real_survival[terminated & alive] = 0
             # Non-time-limit truncations cannot be interpreted as a failure label.
             eligible &= ~(done & ~terminated & alive)
-            sim_return += (real_r + real_style) * alive
-            model_return += (model_r + model_style) * predicted_survival
             if step in (1, 8, 16, 32) or step == args.horizon:
                 n = int(valid.sum())
                 def mean(x):
