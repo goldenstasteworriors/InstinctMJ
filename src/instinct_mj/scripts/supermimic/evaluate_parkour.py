@@ -93,6 +93,8 @@ def main() -> None:
     active = torch.ones(n, dtype=torch.bool, device=dev)
     steps = torch.zeros(n, device=dev)
     returns, lin_sq, yaw_sq, travel = (steps.clone() for _ in range(4))
+    task_term_returns = {}
+    command_nonzero, commanded_motion_stationary = steps.clone(), steps.clone()
     levels = env.scene.terrain.terrain_levels.clone()
     kinds = env.scene.terrain.terrain_types.clone()
     starts = reader.state()[0].clone()
@@ -140,6 +142,21 @@ def main() -> None:
         wb = (R.transpose(-1, -2) @ w.unsqueeze(-1)).squeeze(-1)
         steps += active
         returns += reward.sum(-1) * active
+        # Native weighted manager values are before dt scaling. Read the cached
+        # values: recomputing reward functions can mutate stateful terms.
+        reconstructed_reward = torch.zeros_like(returns)
+        scale = env.step_dt if env.reward_manager.scale_rewards_by_dt else 1.0
+        for group, terms in env.reward_manager._termwise_reward_buf.items():
+            for name, value in terms.items():
+                key = f"{group}/{name}"
+                task_term_returns.setdefault(key, torch.zeros_like(returns))
+                task_term_returns[key] += value * scale * active
+                reconstructed_reward += value * scale
+        if not torch.allclose(reconstructed_reward[active], reward.sum(-1)[active], atol=1e-5, rtol=1e-5):
+            raise ValueError("Reward decomposition does not match native additive task reward")
+        moving_command = command[:, :2].norm(dim=-1) > 0.15
+        command_nonzero += moving_command * active
+        commanded_motion_stationary += moving_command * (vb[:, :2].norm(dim=-1) < 0.1) * active
         lin_sq += (vb[:, :2] - command[:, :2]).square().sum(-1) * active
         yaw_sq += (wb[:, 2] - command[:, 2]).square() * active
         travel += (p[:, :2] - before[:, :2]).norm(dim=-1) * active
@@ -182,6 +199,9 @@ def main() -> None:
                 "action_delta_rms": float((action_delta_sq[i] / steps[i].clamp_min(1)).sqrt())}
                for i in range(n)]
     for i, record in enumerate(records):
+        record["task_reward_terms_return"] = {k: float(v[i]) for k, v in task_term_returns.items()}
+        record["moving_command_fraction"] = float(command_nonzero[i] / steps[i].clamp_min(1))
+        record["stationary_given_moving_command"] = float(commanded_motion_stationary[i] / command_nonzero[i]) if command_nonzero[i] else None
         record["hfield_collision_overflow_seen"] = bool(hfield_first_step[i] >= 0)
         record["hfield_collision_overflow_first_time_s"] = float(hfield_first_step[i] * env.step_dt) if hfield_first_step[i] >= 0 else None
     iteration = runner.it if hasattr(runner, "it") else runner.current_learning_iteration
@@ -199,6 +219,10 @@ def main() -> None:
                "linear_velocity_rmse_mps": float((lin_sq.sum() / steps.sum()).sqrt()),
                "yaw_velocity_rmse_radps": float((yaw_sq.sum() / steps.sum()).sqrt()),
                "contact_fraction_feet_torso_undesired": (contact_sum / steps.sum()).tolist()}
+    summary["task_reward_terms_per_step"] = {k: float(v.sum() / steps.sum()) for k, v in task_term_returns.items()}
+    summary["task_reward_terms_note"] = "Weighted and dt-scaled native task terms; excludes externally added AMP style reward. Sum checked against native reward every step."
+    summary["moving_command_fraction"] = float(command_nonzero.sum() / steps.sum())
+    summary["stationary_given_moving_command"] = float(commanded_motion_stationary.sum() / command_nonzero.sum()) if command_nonzero.sum() else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({**summary, "records": records}, indent=2))
     print(json.dumps(summary), flush=True)
