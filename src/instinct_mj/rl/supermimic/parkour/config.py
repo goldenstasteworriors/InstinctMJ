@@ -18,6 +18,12 @@ class ParkourSuperMimicRunnerCfg(SuperMimicRunnerCfg):
     wm_diagnostics_interval: int = 0
     perception_geometry_weight: float = 0.0
     """Train-only local terrain supervision of the visual encoder; no extra policy/WM input."""
+    critic_real_weight: float = 0.0
+    """Mix real one-step TD loss into critic fitting (0 preserves imagined-only fitting).
+
+    Real targets use task + current AMP reward and bootstrap through truncations,
+    but not failures. Actor optimization and world-model training are unchanged.
+    """
     """Held-out physical-state prediction tests with intact/shuffled/mean perception."""
     """Replay buffer length in vectorized env steps (default 800; the depth stacks dominate the memory)."""
     keep_latest_checkpoints: int = 2

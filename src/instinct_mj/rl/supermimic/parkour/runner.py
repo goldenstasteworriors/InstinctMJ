@@ -59,6 +59,11 @@ class ParkourSuperMimicRunner:
     def __init__(self, env, train_cfg: dict, log_dir: str | None = None, device: str = "cuda:0"):
         self.cfg, self.env, self.log_dir, self.device = copy.deepcopy(train_cfg), env, log_dir, device
         c = self.cfg
+        if not 0.0 <= c.get("critic_real_weight", 0.0) <= 1.0:
+            raise ValueError("critic_real_weight must be in [0, 1]")
+        if c.get("critic_real_weight", 0.0) and c["no_critic"]:
+            raise ValueError("Real critic fitting requires an enabled critic")
+        self.critic_real_metrics = {}
         self.unwrapped = env.unwrapped
         policy_cfg = c["policy"]
         self.obs_format = obs_format = env.get_obs_format()
@@ -447,6 +452,45 @@ class ParkourSuperMimicRunner:
         return {"S0": S0, "S": S, "cmd": cmd, "xi_n": xi_n, "timers": timers, "Ss": Ss, "S_prev": S_prev, "As": As, "Aps": Aps,
                 "Ls": Ls, "Ts": Ts, "Amps": Amps, "timers0": s["timers"]}  # fmt: skip
 
+    @torch.no_grad()
+    def real_critic_batch(self, batch_size):
+        """Real pre-reset transitions, with complete AMP histories and unchanged commands.
+
+        A real failure has zero bootstrap; timeout/boundary truncations retain it.
+        Reference exhaustion does not reset the physical environment. Restrict to
+        training environments; held-out WM data are not used for this extra fit.
+        """
+        buf, mdp = self.buffer, self.mdp
+        eligible = buf.eligible_starts(lambda t: t > mdp.dt, env_range=buf.train_envs, key="time_left")
+        eligible = eligible[eligible[:, 0] >= AMP_HIST - 1]
+        if len(eligible):
+            mature = buf.data["ep_step"][buf._row(eligible[:, 0]), eligible[:, 1]] >= AMP_HIST - 1
+            eligible = eligible[mature]
+        if not len(eligible):
+            raise RuntimeError("No real critic transitions with complete histories and stable commands")
+        pick = eligible[torch.randint(len(eligible), (batch_size,), device=self.device)]
+        age, env = pick[:, 0], pick[:, 1]
+        _, history = buf.starts_at(age, env, AMP_HIST)
+        row = buf._row(age)
+        get = lambda key: buf.data[key][row, env]
+        S, S1 = unflatten_state(get("s")), unflatten_state(get("s1"))
+        xi = self.episode_context(get("lags"), self.fr_n[env])
+        X = self.critic_input(S, get("cmd"), get("timers"), xi)
+        X1 = self.critic_input(S1, get("cmd"), get("timers1"), xi)
+        reward = get("r").clone()
+        if self.style is not None:
+            frames = mdp.amp_frame(unflatten_state(history["s"]))
+            frames = torch.cat((frames[:, 1:], mdp.amp_frame(S1).unsqueeze(1)), 1)
+            reward += self.style.reward(mdp.amp_window(frames))
+        continuation = (~get("terminated")).float()
+        self.critic_real_metrics = {
+            "critic/real_eligible_transitions": float(len(eligible)),
+            "critic/real_failure_fraction": float(1 - continuation.mean()),
+            "critic/real_truncation_fraction": float((get("done") & ~get("terminated")).float().mean()),
+            "critic/real_reward_mean": float(reward.mean()),
+        }
+        return X, X1, reward, continuation
+
     def policy_update(self):
         """H-step imagination from buffered states, BPTT of the discounted return (task + style reward), GAE critic fit."""
         c, mdp, dev = self.cfg, self.mdp, self.device
@@ -499,7 +543,15 @@ class ParkourSuperMimicRunner:
                 rep1 = lambda x: x.unsqueeze(0).expand(HZ + 1, *x.shape).flatten(0, 1)  # noqa: E731
                 X = self.critic_input(S_c, rep1(cmd), T_c, rep1(xi_n)).view(HZ + 1, B, -1)
             self.critic.norm.update(X)
+            real_weight = c.get("critic_real_weight", 0.0)
+            if real_weight:
+                RX, RX1, real_reward, real_continue = self.real_critic_batch(B)
+                self.critic.norm.update(torch.cat((RX, RX1), 0))
             with torch.no_grad():
+                if real_weight:
+                    real_target = real_reward + c["gamma"] * real_continue * self.critic(RX1)
+                    self.critic_real_metrics["critic/real_td_rmse_before_fit"] = float(
+                        (self.critic(RX) - real_target).square().mean().sqrt())
                 V = self.critic(X)
                 R = V[-1]
                 targets = []
@@ -515,6 +567,10 @@ class ParkourSuperMimicRunner:
                 for i in range(c["critic_minibatches"]):
                     idx = perm[i * mb : (i + 1) * mb]
                     v_loss = ((self.critic(Xf[idx]) - Yf[idx]) ** 2).mean()
+                    if real_weight:
+                        real_idx = torch.randint(B, (max(1, B // c["critic_minibatches"]),), device=dev)
+                        real_loss = (self.critic(RX[real_idx]) - real_target[real_idx]).square().mean()
+                        v_loss = (1 - real_weight) * v_loss + real_weight * real_loss
                     self.opt_v.zero_grad(set_to_none=True)
                     v_loss.backward()
                     nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)
@@ -606,6 +662,7 @@ class ParkourSuperMimicRunner:
                     from .perception import perception_diagnostics
                     row.update(perception_diagnostics(self))
                 self.latest_metrics = row
+                row.update(self.critic_real_metrics)
                 if self.log_dir is not None:
                     Path(self.log_dir, "status.json").write_text(json.dumps({
                         "iteration": self.it, "metrics": {k: v if math.isfinite(v) else None for k, v in row.items()}
