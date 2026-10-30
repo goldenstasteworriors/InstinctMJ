@@ -67,19 +67,37 @@ def main():
     obs, _ = vec.get_observations()
     amp_hist = mdp.amp_frame(reader.state()).unsqueeze(1).repeat(1, AMP_HIST, 1)
     rows = []
+    amp_parity = dict(windows=0, elements=0, squared_error_sum=0.0,
+                      max_abs_error=0.0, style_abs_error_sum=0.0)
+    # Ignore startup/backfilled histories: only compare complete windows collected
+    # by both paths in this evaluation, before any reset modifies observations.
+    amp_age = torch.zeros(args.num_envs, dtype=torch.long, device=obs.device)
 
     def real_step(action):
         nonlocal obs, amp_hist
-        obs1, reward, done, _ = vec.step(action)
+        obs1, reward, done, infos = vec.step(action)
         state = reader.state()
         real_timers = reader.feet_timers()
         contact, terminated = reader.contact(), env.reset_terminated.clone()
         amp_hist = torch.cat((amp_hist[:, 1:], mdp.amp_frame(state).unsqueeze(1)), 1)
         style = runner.style.reward(mdp.amp_window(amp_hist)) if runner.style else torch.zeros_like(reward.sum(-1))
+        amp_age.add_(1)
+        if runner.style is not None:
+            mature = amp_age >= AMP_HIST
+            native = infos["observations"]["amp_policy"]
+            rebuilt = mdp.amp_window(amp_hist)
+            error = (rebuilt - native)[mature]
+            if error.numel():
+                amp_parity["windows"] += int(mature.sum())
+                amp_parity["elements"] += error.numel()
+                amp_parity["squared_error_sum"] += float(error.square().sum())
+                amp_parity["max_abs_error"] = max(amp_parity["max_abs_error"], float(error.abs().max()))
+                amp_parity["style_abs_error_sum"] += float((style - runner.style.reward(native))[mature].abs().sum())
         # Read all pre-reset values before resetting finished environments.
         obs = obs1
         ids = done.nonzero().flatten()
         if len(ids):
+            amp_age[ids] = 0
             env.reset(env_ids=ids)
             reset_obs, _ = vec.get_observations()
             obs = torch.where(done.bool()[:, None], reset_obs, obs1)
@@ -185,6 +203,7 @@ def main():
                                   "undesired": reader.undesired_threshold},
         "trained_horizon": agent["horizon"], "evaluated_horizon": args.horizon,
         "wm_direct_terrain_scan": agent.get("wm_use_privileged_scan", True),
+        "amp_native_reconstruction_parity": amp_parity if runner.style is not None else None,
         "reward_units": "weighted reward per 0.02-second control step, including penetration and style separately",
         "records": rows}, indent=2))
     env.close()
