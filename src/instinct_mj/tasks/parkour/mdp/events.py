@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import mjlab.envs.mdp as envs_mdp
 import torch
 from mjlab.managers import SceneEntityCfg
+from mjlab.managers.event_manager import requires_model_fields
 from mjlab.utils.lab_api.math import sample_uniform
 
 if TYPE_CHECKING:
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
 
+@requires_model_fields("geom_friction")
 def randomize_rigid_body_material(
     env: ManagerBasedRlEnv,
     env_ids: torch.Tensor | None,
