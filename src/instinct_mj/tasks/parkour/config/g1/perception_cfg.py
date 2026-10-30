@@ -19,6 +19,11 @@ def elevation_image(env):
     return ((height.clamp(-1.0, 1.0) + 1.0) * 0.5).reshape(-1, 11, 17)
 
 
+def current_depth_image(env):
+    """Current processed camera sample; history is clocked by the observation manager."""
+    return env.scene["camera"].data.output["distance_to_image_plane_noised"].squeeze(-1).clone()
+
+
 def perception_env_cfg(modality: str, play: bool = False):
     assert modality in ("depth", "height")
     # Use identical training termination semantics in evaluation/play as well.
@@ -40,8 +45,8 @@ def perception_env_cfg(modality: str, play: bool = False):
     cfg.terminations.pop("dataset_exhausted")
     # Match the two temporal windows: eight consecutive observations, no extra delay.
     for group in ("policy", "critic"):
-        cfg.observations[group].terms["depth_image"].params.update(
-            history_skip_frames=1, delayed_frame_ranges=(0, 0)
+        cfg.observations[group].terms["depth_image"] = ObservationTermCfg(
+            func=current_depth_image, history_length=8, flatten_history_dim=False,
         )
     if modality == "height":
         cfg.scene.sensors = tuple(s for s in cfg.scene.sensors if s.name != "camera") + (
