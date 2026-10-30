@@ -12,7 +12,6 @@ import math
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 
 import instinct_mj.tasks  # noqa: F401
 from instinct_mj.rl.supermimic.parkour.mdp import AMP_HIST, HIST, PROPRIO_TERMS
@@ -93,6 +92,17 @@ def main():
         real_survival = torch.ones_like(predicted_survival)
         sim_return, model_return = torch.zeros_like(real_survival), torch.zeros_like(real_survival)
         scan = runner.wm_scan(S)
+        if window == 0:
+            actor_a = policy(obs)
+            wm_input = runner.wm.inputs(S, actor_a, runner.wm_context(xi, a_prev), scan)
+            normalized = runner.wm.in_norm(wm_input)
+            debug = dict(input_abs_max_by_feature=normalized.abs().amax(0).tolist(),
+                         latent_mean=float(z.mean()), latent_std=float(z.std()),
+                         normalized_latent_absmax=float(((z-runner.wm.z_mean)/runner.wm.z_std).abs().max()),
+                         friction_mean=runner.fr_mean.tolist(), friction_std=runner.fr_std.tolist(),
+                         friction_normalized_range=[float(runner.fr_n.min()), float(runner.fr_n.max())],
+                         normalizer_count=float(runner.wm.in_norm.count))
+            print(json.dumps({"initial_context": debug}), flush=True)
         for step in range(1, args.horizon + 1):
             S0, ap = S, a_prev
             a_prev, S, z, logits, timers, o_hist, amp_im, scan = runner.imag_core(S, z, o_hist, amp_im, timers, a_prev, cmd, xi, scan)
