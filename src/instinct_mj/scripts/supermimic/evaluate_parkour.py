@@ -34,6 +34,8 @@ def main() -> None:
     parser.add_argument("--seed", default=1234, type=int)
     parser.add_argument("--command-mode", choices=("task", "forward"), default="task")
     parser.add_argument("--forward-speed", default=0.6, type=float)
+    parser.add_argument("--friction-coefficient", type=float,
+                        help="Optional common simulator friction for controlled cross-policy gait comparisons")
     parser.add_argument("--initial-terrain-level", type=int,
                         help="Optional maximum initial level, e.g. 0 for a separate easy-terrain gait probe")
     parser.add_argument("--video", type=Path, help="Optional four-view MP4; first episodes freeze at termination.")
@@ -46,12 +48,17 @@ def main() -> None:
         raise FileExistsError("Refusing to overwrite an existing evaluation artifact")
     if args.forward_speed <= 0 or (args.initial_terrain_level is not None and args.initial_terrain_level < 0):
         raise ValueError("Invalid forward speed or terrain level")
+    if args.friction_coefficient is not None and args.friction_coefficient <= 0:
+        raise ValueError("Controlled friction coefficient must be positive")
     torch.set_num_threads(8)
     torch.manual_seed(args.seed)
     cfg = load_env_cfg(args.task)
     cfg.seed, cfg.scene.num_envs = args.seed, args.num_envs
     cfg.auto_reset, cfg.monitors, cfg.curriculum = False, {}, {}
     cfg.episode_length_s = args.seconds
+    if args.friction_coefficient is not None:
+        mu = args.friction_coefficient
+        cfg.events["physics_material"].params.update(static_friction_range=(mu, mu), dynamic_friction_range=(mu, mu))
     if args.initial_terrain_level is not None:
         cfg.scene.terrain.max_init_terrain_level = args.initial_terrain_level
     if args.command_mode == "forward":
@@ -68,6 +75,9 @@ def main() -> None:
     runner.load(str(args.checkpoint))
     policy = runner.get_inference_policy()
     reader = ParkourSimReader(env)
+    if args.friction_coefficient is not None and not torch.allclose(
+            reader.friction(), torch.full_like(reader.friction(), args.friction_coefficient), atol=1e-6):
+        raise ValueError("Simulator friction differs from the requested controlled coefficient")
     obs, _ = vec.get_observations()
     offset = 0
     for name, shape in vec.get_obs_format()["policy"].items():
@@ -169,6 +179,7 @@ def main() -> None:
                "command_mode": args.command_mode, "forward_speed_mps": args.forward_speed if args.command_mode == "forward" else None,
                "initial_terrain_level_max": cfg.scene.terrain.max_init_terrain_level,
                "feet_contact_threshold_N": reader.feet_threshold,
+               "controlled_friction_coefficient": args.friction_coefficient,
                "protocol": "First episode; training randomization/terminations; pre-reset metrics; no curriculum updates",
                "survived_horizon": result.count("survived_horizon"), "failed": result.count("failure"),
                "censored": sum(x not in ("failure", "survived_horizon") for x in result),
