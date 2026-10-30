@@ -175,7 +175,13 @@ class ParkourSuperMimicRunner:
         }  # fmt: skip
         self.buffer = ReplayBuffer(c["buffer_steps"], self.N, self.K, device, c["wm_holdout_envs"], fields=fields)
         if c.get("wm_stratified_holdout", False):
-            self.buffer.stratify_holdout(self.unwrapped.scene.terrain.terrain_types, c.get("wm_holdout_seed", 42))
+            terrain_types = self.unwrapped.scene.terrain.terrain_types
+            self.buffer.stratify_holdout(terrain_types, c.get("wm_holdout_seed", 42))
+            if c["wm_holdout_envs"] > 0:
+                print("WM terrain split (type, train, holdout):", [
+                    (int(t), int((terrain_types[self.buffer.train_envs] == t).sum()),
+                     int((terrain_types[self.buffer.holdout_envs] == t).sum()))
+                    for t in terrain_types.unique(sorted=True)])
         self.buffer.window_keys = ("s", "s1", "a", "a_prev", "contact", "cmd", "lags", "timers", "timers1", "depth", "depth1", "done", "terminated")
         self.buffer.start_keys = ("s", "a_prev", "cmd", "lags", "timers", "depth")
         self.buffer.hist_keys = ("s", "a_prev", "cmd")
