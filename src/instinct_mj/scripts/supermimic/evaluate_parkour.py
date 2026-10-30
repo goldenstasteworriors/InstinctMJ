@@ -8,6 +8,7 @@ seed and its domain randomization, camera noise and initial terrain levels 0..5.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 from pathlib import Path
@@ -34,6 +35,8 @@ def main() -> None:
     parser.add_argument("--seconds", default=20.0, type=float)
     parser.add_argument("--seed", default=1234, type=int)
     parser.add_argument("--command-mode", choices=("task", "forward"), default="task")
+    parser.add_argument("--terrain-probe", choices=("task", "flat"), default="task",
+                        help="Separate gait-only probe: large flat terrain without walls; never a parkour success test")
     parser.add_argument("--forward-speed", default=0.6, type=float)
     parser.add_argument("--friction-coefficient", type=float,
                         help="Optional common simulator friction for controlled cross-policy gait comparisons")
@@ -57,6 +60,19 @@ def main() -> None:
     cfg.seed, cfg.scene.num_envs = args.seed, args.num_envs
     cfg.auto_reset, cfg.monitors, cfg.curriculum = False, {}, {}
     cfg.episode_length_s = args.seconds
+    if args.terrain_probe == "flat":
+        if args.command_mode != "forward":
+            raise ValueError("Flat gait probe requires an explicit forward command")
+        generator = cfg.scene.terrain.terrain_generator
+        flat = copy.deepcopy(generator.sub_terrains["perlin_rough"])
+        flat.noise_scale, flat.wall_prob, flat.proportion = [0.0, 0.0], [0.0] * 4, 1.0
+        generator.sub_terrains = {"perlin_rough": flat}
+        generator.num_rows = generator.num_cols = 1
+        extent = max(30.0, 2 * (args.forward_speed * args.seconds + 3.0))
+        generator.size = (extent, extent)
+        cfg.scene.terrain.max_init_terrain_level = 0
+        command_cfg = cfg.commands["base_velocity"]
+        command_cfg.velocity_ranges = {"perlin_rough": command_cfg.velocity_ranges["perlin_rough"]}
     if args.friction_coefficient is not None:
         mu = args.friction_coefficient
         cfg.events["physics_material"].params.update(static_friction_range=(mu, mu), dynamic_friction_range=(mu, mu))
@@ -207,6 +223,8 @@ def main() -> None:
     iteration = runner.it if hasattr(runner, "it") else runner.current_learning_iteration
     summary = {"checkpoint": str(args.checkpoint), "iteration": iteration, "seed": args.seed, "episodes": n,
                "task": args.task, "perception_intervention": args.perception_intervention,
+               "terrain_probe": args.terrain_probe,
+               "terrain_size_m": list(cfg.scene.terrain.terrain_generator.size),
                "command_mode": args.command_mode, "forward_speed_mps": args.forward_speed if args.command_mode == "forward" else None,
                "initial_terrain_level_max": cfg.scene.terrain.max_init_terrain_level,
                "feet_contact_threshold_N": reader.feet_threshold,
