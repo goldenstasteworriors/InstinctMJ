@@ -108,6 +108,7 @@ def main():
         alive = eligible.clone()
         predicted_survival = torch.ones(args.num_envs, device=env.device)
         real_survival = torch.ones_like(predicted_survival)
+        real_return, model_return = torch.zeros_like(real_survival), torch.zeros_like(real_survival)
         scan = runner.wm_scan(S)
         if window == 0:
             actor_a = policy(obs)
@@ -129,11 +130,15 @@ def main():
             if agent["fail_head"] and runner.it >= runner.fail_head_start_it + agent["fail_head_warmup_iters"]:
                 pf = runner.fail_head(runner.critic_input(S, cmd, timers, xi)).sigmoid().clamp(max=agent["fail_clip"])
                 d = 1 - (1 - d) * (1 - pf.squeeze(-1))
+            # Match policy_update: pay this step under previous survival, then
+            # apply termination. These returns exclude the critic bootstrap.
+            model_return += agent["gamma"] ** (step - 1) * predicted_survival * (model_r + model_style)
             predicted_survival *= 1 - d
             real_a = policy(obs)
             Sr, contact, terminated, done, real_r, real_style, real_timers = real_step(real_a)
             # Include the first failing transition in state errors, then censor resets.
             valid = alive.clone()
+            real_return += agent["gamma"] ** (step - 1) * alive * (real_r + real_style)
             real_survival[terminated & alive] = 0
             # Non-time-limit truncations cannot be interpreted as a failure label.
             eligible &= ~(done & ~terminated & alive)
@@ -161,6 +166,14 @@ def main():
                 }
                 rows[-1]["failure_calibration"] = binary_calibration(
                     1 - predicted_survival, 1 - real_survival, eligible)
+                tr, pr = real_return[eligible], model_return[eligible]
+                enough_variance = tr.numel() > 2 and float(tr.std()) > 1e-6 and float(pr.std()) > 1e-6
+                rows[-1]["discounted_return_without_bootstrap"] = dict(
+                    count=tr.numel(), real_mean=float(tr.mean()) if tr.numel() else None,
+                    model_mean=float(pr.mean()) if pr.numel() else None,
+                    paired_rmse=float((pr - tr).square().mean().sqrt()) if tr.numel() else None,
+                    paired_bias=float((pr - tr).mean()) if tr.numel() else None,
+                    pearson=float(torch.corrcoef(torch.stack((tr, pr)))[0, 1]) if enough_variance else None)
             alive &= ~done
         print(json.dumps(rows[-1]), flush=True)
         for _ in range(AMP_HIST):
