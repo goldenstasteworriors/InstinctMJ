@@ -28,12 +28,20 @@ def main():
     p.add_argument("--seed", default=1234, type=int)
     p.add_argument("--windows", default=16, type=int)
     p.add_argument("--horizon", default=32, type=int)
+    p.add_argument("--friction", choices=("task", "training"), default="task",
+                   help="training fixes simulator friction to the checkpoint mean, isolating dynamics from unseen friction")
     args = p.parse_args()
     if args.output.exists():
         raise FileExistsError(args.output)
     torch.set_num_threads(8)
     torch.manual_seed(args.seed)
     cfg = load_env_cfg(args.task)
+    if args.friction == "training":
+        sidecar = args.checkpoint.with_name(args.checkpoint.name.replace("model_", "supermimic_state_"))
+        ck = torch.load(sidecar, map_location="cpu", weights_only=False)
+        mu = float(ck["fr_mean"].item())
+        cfg.events["physics_material"].params.update(static_friction_range=(mu, mu), dynamic_friction_range=(mu, mu))
+        del ck
     cfg.seed, cfg.scene.num_envs = args.seed, args.num_envs
     cfg.auto_reset, cfg.curriculum, cfg.monitors = False, {}, {}
     env = load_env_cls(args.task)(cfg, device="cuda:0")
@@ -141,7 +149,7 @@ def main():
             real_step(policy(obs))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({"checkpoint": str(args.checkpoint), "task": args.task,
-        "protocol": __doc__, "seed": args.seed, "records": rows}, indent=2))
+        "protocol": __doc__, "seed": args.seed, "friction_mode": args.friction, "records": rows}, indent=2))
     env.close()
 
 
