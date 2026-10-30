@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 
 import torch
+from instinct_rl.runners import OnPolicyRunner
 
 import instinct_mj.tasks  # noqa: F401
 from instinct_mj.rl.supermimic.parkour.sim import ParkourSimReader
@@ -45,7 +46,8 @@ def main() -> None:
     cfg.episode_length_s = args.seconds
     env = load_env_cls(args.task)(cfg, device="cuda:0")
     vec = load_vecenv_cls(args.task)(env, policy_group="policy", critic_group="critic")
-    runner = load_runner_cls(args.task)(vec, load_instinct_rl_cfg(args.task).to_dict(), device="cuda:0")
+    runner_cls = load_runner_cls(args.task) or OnPolicyRunner
+    runner = runner_cls(vec, load_instinct_rl_cfg(args.task).to_dict(), device="cuda:0")
     runner.load(str(args.checkpoint))
     policy = runner.get_inference_policy()
     reader = ParkourSimReader(env)

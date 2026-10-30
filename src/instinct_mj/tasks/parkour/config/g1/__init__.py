@@ -87,3 +87,23 @@ register_instinct_task(
     instinct_rl_cfg_factory=g1_parkour_supermimic_instinct_rl_cfg,
     runner_entry_point=PARKOUR_SUPERMIMIC_RUNNER_ENTRY_POINT,
 )
+
+
+def _comparison_ppo(no_amp=False):
+    from .comparison_cfg import comparison_ppo_cfg
+    return comparison_ppo_cfg(no_amp)
+
+
+register_instinct_task(
+    task_id="Instinct-Parkour-Target-Amp-MatchedPPO-G1-v0",
+    env_cfg_factory=lambda: _parkour_amp_env_cfg(play=False, shoe=True, smooth_dont_wait=True),
+    play_env_cfg_factory=lambda: _parkour_amp_env_cfg(play=False, shoe=True, smooth_dont_wait=True),
+    instinct_rl_cfg_factory=_comparison_ppo,
+)
+
+register_instinct_task(
+    task_id="Instinct-Velocity-NoAmp-Depth-MatchedPPO-G1-v0",
+    env_cfg_factory=lambda: _perception_env("depth"),
+    play_env_cfg_factory=lambda: _perception_env("depth"),
+    instinct_rl_cfg_factory=lambda: _comparison_ppo(True),
+)
