@@ -11,9 +11,9 @@ def binary_calibration(probability, target, valid, bins=10):
     and reliability-bin sums prevents averages of per-window ratios from hiding
     rare torso failures or unequal numbers of surviving trajectories.
     """
-    if bins < 1 or probability.shape != target.shape or probability.shape[0] != valid.numel():
+    if bins < 1 or valid.ndim != 1 or probability.shape != target.shape or probability.shape[0] != valid.numel():
         raise ValueError("Invalid calibration shape or bin count")
-    probability, target = probability[valid.bool()].flatten(), target[valid.bool()].flatten()
+    probability, target = probability[valid.bool()].flatten(), target[valid.bool()].flatten().float()
     if not torch.isfinite(probability).all() or not torch.isfinite(target).all():
         raise ValueError("Nonfinite calibration input")
     if ((probability < 0) | (probability > 1)).any() or ((target != 0) & (target != 1)).any():
