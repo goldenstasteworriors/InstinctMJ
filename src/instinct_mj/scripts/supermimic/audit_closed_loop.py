@@ -72,6 +72,7 @@ def main():
         nonlocal obs, amp_hist
         obs1, reward, done, _ = vec.step(action)
         state = reader.state()
+        real_timers = reader.feet_timers()
         contact, terminated = reader.contact(), env.reset_terminated.clone()
         amp_hist = torch.cat((amp_hist[:, 1:], mdp.amp_frame(state).unsqueeze(1)), 1)
         style = runner.style.reward(mdp.amp_window(amp_hist)) if runner.style else torch.zeros_like(reward.sum(-1))
@@ -83,7 +84,7 @@ def main():
             reset_obs, _ = vec.get_observations()
             obs = torch.where(done.bool()[:, None], reset_obs, obs1)
             amp_hist[ids] = mdp.amp_frame(reader.state())[ids, None].expand(-1, AMP_HIST, -1)
-        return state, contact, terminated, done.bool(), reward.sum(-1), style
+        return state, contact, terminated, done.bool(), reward.sum(-1), style, real_timers
 
     for _ in range(AMP_HIST + 8):
         real_step(policy(obs))
@@ -130,7 +131,7 @@ def main():
                 d = 1 - (1 - d) * (1 - pf.squeeze(-1))
             predicted_survival *= 1 - d
             real_a = policy(obs)
-            Sr, contact, terminated, done, real_r, real_style = real_step(real_a)
+            Sr, contact, terminated, done, real_r, real_style, real_timers = real_step(real_a)
             # Include the first failing transition in state errors, then censor resets.
             valid = alive.clone()
             real_survival[terminated & alive] = 0
@@ -145,6 +146,8 @@ def main():
                     velocity_rmse_mps=math.sqrt(mean((S[2] - Sr[2]).square().mean(-1))) if n else None,
                     action_rmse=math.sqrt(mean((a_prev - real_a).square().mean(-1))) if n else None,
                     contact_brier=mean((logits.sigmoid() - contact).square().mean(-1)),
+                    feet_air_timer_mae_s=mean((timers[:, :2] - real_timers[:, :2]).abs().mean(-1)),
+                    feet_contact_timer_mae_s=mean((timers[:, 2:] - real_timers[:, 2:]).abs().mean(-1)),
                     style_real=mean(real_style), style_model=mean(model_style),
                     task_reward_real=mean(real_r), task_reward_model=mean(model_r),
                     survival_real=float(real_survival[eligible].mean()) if eligible.any() else None,
