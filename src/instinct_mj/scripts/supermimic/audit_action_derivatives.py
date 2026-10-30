@@ -62,7 +62,9 @@ def main():
               "xfrc_applied", "mocap_pos", "mocap_quat", "time")
     # All fields are required; silently skipping integration state is unsafe.
     for field in fields:
-        if not isinstance(getattr(env.sim.data, field), torch.Tensor):
+        # WarpBridge exposes tensor proxies; clone resolves the underlying
+        # tensor without assuming its wrapper inherits torch.Tensor.
+        if not isinstance(getattr(env.sim.data, field).clone(), torch.Tensor):
             raise TypeError(field)
     records, repeatability = [], []
     for window in range(args.windows):
