@@ -15,6 +15,7 @@ import torch
 
 import instinct_mj.tasks  # noqa: F401
 from instinct_mj.rl.supermimic.parkour.mdp import AMP_HIST, HIST, PROPRIO_TERMS
+from instinct_mj.rl.supermimic.parkour.calibration import binary_calibration
 from instinct_mj.tasks.registry import load_env_cfg, load_env_cls, load_instinct_rl_cfg, load_runner_cls, load_vecenv_cls
 
 
@@ -31,6 +32,8 @@ def main():
     p.add_argument("--friction", choices=("task", "training"), default="task",
                    help="training fixes simulator friction to the checkpoint mean, isolating dynamics from unseen friction")
     args = p.parse_args()
+    if args.num_envs < 2 or args.windows < 1 or args.horizon < 1:
+        raise ValueError("Need at least two environments and positive windows/horizon")
     if args.output.exists():
         raise FileExistsError(args.output)
     torch.set_num_threads(8)
@@ -147,13 +150,27 @@ def main():
                     survival_real=float(real_survival[eligible].mean()) if eligible.any() else None,
                     survival_model=float(predicted_survival[eligible].mean()) if eligible.any() else None,
                     survival_brier=float((predicted_survival[eligible] - real_survival[eligible]).square().mean()) if eligible.any() else None))
+                probability = logits.sigmoid()
+                rows[-1]["contact_calibration"] = {
+                    name: binary_calibration(probability[:, indices], contact[:, indices], valid)
+                    for name, indices in (("left_foot", slice(0, 1)), ("right_foot", slice(1, 2)),
+                                          ("torso", slice(2, 3)), ("undesired", slice(3, None)))
+                }
+                rows[-1]["failure_calibration"] = binary_calibration(
+                    1 - predicted_survival, 1 - real_survival, eligible)
             alive &= ~done
         print(json.dumps(rows[-1]), flush=True)
         for _ in range(AMP_HIST):
             real_step(policy(obs))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({"checkpoint": str(args.checkpoint), "task": args.task,
-        "protocol": __doc__, "seed": args.seed, "friction_mode": args.friction, "records": rows}, indent=2))
+        "protocol": __doc__, "seed": args.seed, "friction_mode": args.friction,
+        "contact_thresholds_N": {"feet": reader.feet_threshold, "torso": reader.torso_threshold,
+                                  "undesired": reader.undesired_threshold},
+        "trained_horizon": agent["horizon"], "evaluated_horizon": args.horizon,
+        "wm_direct_terrain_scan": agent.get("wm_use_privileged_scan", True),
+        "reward_units": "weighted reward per 0.02-second control step, including penetration and style separately",
+        "records": rows}, indent=2))
     env.close()
 
 
