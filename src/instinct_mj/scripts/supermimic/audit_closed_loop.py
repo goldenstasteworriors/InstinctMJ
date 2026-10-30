@@ -36,17 +36,23 @@ def main():
     torch.set_num_threads(8)
     torch.manual_seed(args.seed)
     cfg = load_env_cfg(args.task)
+    sidecar = args.checkpoint.with_name(args.checkpoint.name.replace("model_", "supermimic_state_"))
+    ck = torch.load(sidecar, map_location="cpu", weights_only=False)
+    saved_cfg, trained_friction = ck["cfg"], float(ck["fr_mean"].item())
+    del ck
     if args.friction == "training":
-        sidecar = args.checkpoint.with_name(args.checkpoint.name.replace("model_", "supermimic_state_"))
-        ck = torch.load(sidecar, map_location="cpu", weights_only=False)
-        mu = float(ck["fr_mean"].item())
+        mu = trained_friction
         cfg.events["physics_material"].params.update(static_friction_range=(mu, mu), dynamic_friction_range=(mu, mu))
-        del ck
     cfg.seed, cfg.scene.num_envs = args.seed, args.num_envs
     cfg.auto_reset, cfg.curriculum, cfg.monitors = False, {}, {}
     env = load_env_cls(args.task)(cfg, device="cuda:0")
     vec = load_vecenv_cls(args.task)(env, policy_group="policy", critic_group="critic")
     agent = load_instinct_rl_cfg(args.task).to_dict()
+    # Runner construction removes policy.class_name from saved cfg; recover it
+    # from the task while restoring all algorithm/auxiliary-head flags exactly.
+    policy_class = agent["policy"]["class_name"]
+    agent.update(saved_cfg)
+    agent["policy"] = dict(saved_cfg["policy"], class_name=policy_class)
     agent.update(compile=False, compile_policy=False, buffer_steps=64)
     runner = load_runner_cls(args.task)(vec, agent, device="cuda:0")
     runner.load(str(args.checkpoint))

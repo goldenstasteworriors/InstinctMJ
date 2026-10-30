@@ -10,6 +10,8 @@ from instinct_rl.runners import OnPolicyRunner
 
 class ComparisonPPORunner(OnPolicyRunner):
     def log(self, locs, *args, **kwargs):
+        # Upstream increments by one rollout per log call even if log_interval>1.
+        self.tot_timesteps = self.current_learning_iteration * self.num_steps_per_env * self.env.num_envs
         super().log(locs, *args, **kwargs)
         if not self.log_dir:
             return

@@ -144,8 +144,9 @@ class ParkourSuperMimicRunner:
         self.wm_params = [*self.wm.parameters(), *self.enc.parameters(), *self.latent_dec.parameters()]
         self.geometry_dec = None
         if c.get("perception_geometry_weight", 0.0) > 0:
-            self.geometry_dec = nn.Sequential(nn.Linear(self.z_dim, 256), nn.ELU(),
-                                              nn.Linear(256, self.scanner.num_rays), nn.Sigmoid()).to(device)
+            with torch.random.fork_rng(devices=[torch.device(device)]):
+                self.geometry_dec = nn.Sequential(nn.Linear(self.z_dim, 256), nn.ELU(),
+                                                  nn.Linear(256, self.scanner.num_rays), nn.Sigmoid()).to(device)
             self.wm_params += list(self.geometry_dec.parameters())
         self.opt_wm = torch.optim.Adam(self.wm_params, lr=c["lr"])
         self.opt_v = torch.optim.Adam(self.critic.parameters(), lr=c["lr"])

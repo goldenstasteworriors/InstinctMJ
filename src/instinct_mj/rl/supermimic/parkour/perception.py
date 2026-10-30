@@ -69,4 +69,9 @@ Windows end at real episode resets, using the replay validity mask.
         out["wm_diag/reconstruction_mae_m"] = float((reconstructed - depth).abs().mean() * span)
         out["wm_diag/mean_image_mae_m"] = float((depth.mean(0, keepdim=True) - depth).abs().mean() * span)
         out["wm_diag/latent_std"] = float(z0.std(0).mean())
+        if getattr(runner, "geometry_dec", None) is not None:
+            geometry_target = runner.mdp.scan(unflatten_state(w["s"][:, 0])).clamp(0, 2.5)
+            geometry_prediction = runner.geometry_dec(z0) * 2.5
+            out["wm_diag/geometry_mae_m"] = float((geometry_prediction - geometry_target).abs().mean())
+            out["wm_diag/geometry_mean_baseline_mae_m"] = float((geometry_target.mean(0, keepdim=True) - geometry_target).abs().mean())
         return out
