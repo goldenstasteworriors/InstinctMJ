@@ -64,6 +64,11 @@ def prepare(plan, folder):
     ids = [j["id"] for j in plan["jobs"]]
     if len(ids) != len(set(ids)) or any(j["amp"] not in ("walk", "run", "none") for j in plan["jobs"]):
         raise ValueError("Invalid queue jobs")
+    if any(not 0 <= j.get("critic_real_weight", 0.0) <= 1 for j in plan["jobs"]):
+        raise ValueError("Invalid real critic weight")
+    dependency = plan.get("after_queue")
+    if dependency is not None and (not dependency or Path(dependency).name != dependency or dependency in (".", "..")):
+        raise ValueError("Dependency must name a queue under the project log root")
     inventory = {}
     selection_root = DATA / plan["id"]
     selection_root.mkdir(parents=True, exist_ok=True)
@@ -112,6 +117,8 @@ def training_command(plan, job, run_dir, checkpoint=None):
            "--agent.wm-holdout-envs", str(flags[2]),
            "--agent.style-reward-coef", "0" if job["amp"] == "none" else "0.25",
            "--agent.style-minibatches", "0" if job["amp"] == "none" else "2"]
+    if job.get("critic_real_weight", 0.0):
+        cmd += ["--agent.critic-real-weight", str(job["critic_real_weight"])]
     if checkpoint is not None:
         cmd += ["--agent.load-run", str(run_dir), "--agent.load-checkpoint", checkpoint]
     return cmd
@@ -187,6 +194,19 @@ def work(plan, folder, manifest):
     with (RUNTIME / (plan["id"] + ".lock")).open("a") as worker_lock:
         fcntl.flock(worker_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = read_json(folder / "state.json")
+        if plan.get("after_queue") and any(j["status"] != "completed" for j in state["jobs"]):
+            dependency = LOGS / plan["after_queue"] / "state.json"
+            state.update(status="waiting_for_dependency", dependency=str(dependency), updated_at=now())
+            write_json(folder / "state.json", state)
+            while True:
+                parent = read_json(dependency) if dependency.exists() else {}
+                if parent.get("status") == "completed":
+                    break
+                if parent.get("status") == "failed":
+                    state.update(status="failed", error="Dependency failed; no training started", updated_at=now())
+                    write_json(folder / "state.json", state)
+                    raise RuntimeError(state["error"])
+                time.sleep(30)
         for job in state["jobs"]:
             if job["status"] == "completed":
                 continue
