@@ -4,7 +4,8 @@ This is a local one-control-step dynamics test, not a policy-return gradient tes
 Friction is fixed to the checkpoint mean and actuator delays are zero (a trained
 delay value). Each perturbation restores integration state in the same world.
 No reset/termination is applied inside the physics probe; warmup uses task resets.
-Repeated unperturbed steps must agree before any derivative result is accepted.
+Repeated unperturbed steps must agree for an environment before its derivative
+result is accepted. Rejected environments are retained as diagnostic evidence.
 """
 
 import argparse
@@ -136,6 +137,8 @@ def main():
                 (torch.autograd.grad(model_v[:, axis].sum(), action, retain_graph=axis < 2)[0] * direction).sum(-1)
                 for axis in range(3)], -1).detach()
         base = physical(a)
+        initial_repeat = physical(a)
+        start_record = len(records)
         for epsilon in args.epsilon:
             if (a.abs() + epsilon * direction.abs()).max() >= 20:
                 raise RuntimeError("Action clipping invalidates central difference")
@@ -150,15 +153,22 @@ def main():
                 model_central_difference=model_fd.cpu().tolist(), initial_feet_contact=initial_contact.cpu().tolist(),
                 real_velocity=base.cpu().tolist(), model_velocity=model_v.detach().cpu().tolist()))
         repeated = physical(a)
-        error = float((repeated - base).abs().max())
-        repeatability.append(error)
-        if not torch.isfinite(repeated).all() or error > 1e-5:
-            raise RuntimeError(f"Restored simulator is not repeatable: velocity max error {error}")
-        print(json.dumps(dict(window=window, repeatability_velocity_absmax=error)), flush=True)
+        error = torch.maximum((repeated - base).abs(), (initial_repeat - base).abs()).amax(-1)
+        if not torch.isfinite(error).all():
+            raise RuntimeError("Nonfinite simulator repeatability error")
+        accepted = error <= 1e-5
+        repeatability.append(dict(window=window, accepted_count=int(accepted.sum()),
+            max_error_mps=float(error.max()), per_env_error_mps=error.cpu().tolist()))
+        for record in records[start_record:]:
+            record["repeatable_environment"] = accepted.cpu().tolist()
+            record["repeatability_velocity_absmax_mps"] = error.cpu().tolist()
+        print(json.dumps(dict(window=window, accepted_count=int(accepted.sum()),
+                              repeatability_velocity_absmax=float(error.max()))), flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(protocol=__doc__, checkpoint=str(args.checkpoint),
         task=args.task, seed=args.seed, friction=mu, actuator_delay_steps=0,
         dt=env.step_dt, restored_fields=list(data_arrays), snapshot_bytes=snapshot_bytes,
+        repeatability_tolerance_mps=1e-5,
         repeatability_velocity_absmax=repeatability,
         records=records), indent=2))
     env.close()
