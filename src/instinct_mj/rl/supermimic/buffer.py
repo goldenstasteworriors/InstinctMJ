@@ -54,6 +54,39 @@ class ReplayBuffer:
             self.data[k] = torch.zeros(shp, dtype=dt, device=device)
         self.ptr, self.size = 0, 0
 
+    def stratify_holdout(self, labels: torch.Tensor, seed: int):
+        """Split fixed environment identities within terrain classes, without consuming training RNG.
+
+        Keep the original total holdout size. Every class retains training data;
+        when the budget permits, every class also contributes validation data.
+        Returned sample indices always remain physical environment indices.
+        """
+        if self.size:
+            raise ValueError("Configure holdout before collecting transitions")
+        if labels.shape != (self.N,):
+            raise ValueError("Expected one terrain label per environment")
+        labels = labels.detach().cpu()
+        groups = [torch.where(labels == label)[0] for label in labels.unique(sorted=True)]
+        total = self.N - self.train_envs[1]
+        if total == 0:
+            return
+        capacities = [len(group) - 1 for group in groups]
+        if total > sum(capacities):
+            raise ValueError("Holdout leaves no training data in at least one terrain class")
+        counts = [int(cap > 0 and total >= sum(c > 0 for c in capacities)) for cap in capacities]
+        targets = [total * len(group) / self.N for group in groups]
+        while sum(counts) < total:
+            i = max((i for i in range(len(groups)) if counts[i] < capacities[i]),
+                    key=lambda i: targets[i] - counts[i])
+            counts[i] += 1
+        generator = torch.Generator().manual_seed(seed)
+        held = torch.cat([group[torch.randperm(len(group), generator=generator)[:n]]
+                          for group, n in zip(groups, counts)])
+        mask = torch.ones(self.N, dtype=torch.bool)
+        mask[held] = False
+        self.train_envs = mask.nonzero().flatten().to(self.device)
+        self.holdout_envs = held.sort().values.to(self.device)
+
     def add(self, tr: dict):
         for k in self.data:
             self.data[k][self.ptr] = tr[k]
@@ -64,7 +97,7 @@ class ReplayBuffer:
         """Map age-ordered time index (0 = oldest) to the storage row."""
         return (self.ptr - self.size + age) % self.T
 
-    def sample_windows(self, B: int, k: int, env_range: tuple[int, int] | None = None, failure_frac: float = 0.0, failure_horizon: int = 16):
+    def sample_windows(self, B: int, k: int, env_range: tuple[int, int] | torch.Tensor | None = None, failure_frac: float = 0.0, failure_horizon: int = 16):
         """k-step windows; returns dict of (B, k, ...) tensors, the env index (B,), a validity mask (B, k) and, for the
         importance-weighted heads, ``weight`` (B,) that undoes the failure oversampling.
 
@@ -72,7 +105,8 @@ class ReplayBuffer:
         ``failure_horizon`` transitions starting at the window start (so the approach to the failure is covered); the rest is
         uniform. ``weight`` = uniform density / mixture density, i.e. 1 / ((1 - q) + q * W / F) for windows in the failure set
         (W = number of windows, F = size of the failure set, q = failure share) and 1 / (1 - q) otherwise."""
-        lo, hi = env_range if env_range is not None else (0, self.N)
+        selected = env_range if isinstance(env_range, torch.Tensor) else None
+        lo, hi = (0, len(selected)) if selected is not None else (env_range if env_range is not None else (0, self.N))
         n_win, n_env = self.size - k + 1, hi - lo
         n_fail = int(B * failure_frac)
         t0 = torch.randint(0, n_win, (B,), device=self.device)
@@ -81,7 +115,8 @@ class ReplayBuffer:
         if n_fail > 0:
             # no host syncs: the failure set is kept as a mask, the failure windows are drawn with ``multinomial`` over it
             rows_all = self._row(torch.arange(self.size, device=self.device))
-            term = self.data["terminated"][rows_all][:, lo:hi].int()
+            term = self.data["terminated"][rows_all]
+            term = (term[:, selected] if selected is not None else term[:, lo:hi]).int()
             cum = torch.nn.functional.pad(term.cumsum(0), (0, 0, 1, 0))  # (size + 1, n): terminations in rows < t
             t0_all = torch.arange(n_win, device=self.device)
             t1_all = (t0_all + failure_horizon).clamp(max=self.size)
@@ -96,6 +131,8 @@ class ReplayBuffer:
             q = (n_fail / B) * (n_failure_windows > 0).float()
             in_fail = fail_set[t0, env - lo]
             weight = torch.where(in_fail, 1.0 / ((1 - q) + q * fail_set.numel() / n_failure_windows.clamp(min=1)), 1.0 / (1 - q))
+        if selected is not None:
+            env = selected[env]
         ages = t0.unsqueeze(-1) + torch.arange(k, device=self.device)
         rows = self._row(ages)
         e = env.unsqueeze(-1).expand_as(rows)
@@ -108,15 +145,17 @@ class ReplayBuffer:
         return out
 
     def eligible_starts(
-        self, ok_fn, env_range: tuple[int, int] | None = None, max_age: int | None = None, key: str = "f"
+        self, ok_fn, env_range: tuple[int, int] | torch.Tensor | None = None, max_age: int | None = None, key: str = "f"
     ) -> torch.Tensor:
         """(M, 2) ``(age, env)`` pairs of all buffered states for which ``ok_fn(data[key])`` holds (default: the global
         reference frame index)."""
-        lo, hi = env_range if env_range is not None else (0, self.N)
+        selected = env_range if isinstance(env_range, torch.Tensor) else None
+        lo, hi = (0, len(selected)) if selected is not None else (env_range if env_range is not None else (0, self.N))
         rows = self._row(torch.arange(self.size if max_age is None else max_age + 1, device=self.device))
-        ok = ok_fn(self.data[key][rows][:, lo:hi])  # (n_age, n_env)
+        values = self.data[key][rows]
+        ok = ok_fn(values[:, selected] if selected is not None else values[:, lo:hi])
         idx = ok.nonzero(as_tuple=False)
-        idx[:, 1] += lo
+        idx[:, 1] = selected[idx[:, 1]] if selected is not None else idx[:, 1] + lo
         return idx
 
     def starts_at(self, age: torch.Tensor, env: torch.Tensor, hist: int):

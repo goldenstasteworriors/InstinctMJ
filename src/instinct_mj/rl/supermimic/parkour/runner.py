@@ -174,6 +174,8 @@ class ParkourSuperMimicRunner:
             "r": ((), torch.float32), "ep_step": ((), torch.int32), "done": ((), torch.bool), "terminated": ((), torch.bool),
         }  # fmt: skip
         self.buffer = ReplayBuffer(c["buffer_steps"], self.N, self.K, device, c["wm_holdout_envs"], fields=fields)
+        if c.get("wm_stratified_holdout", False):
+            self.buffer.stratify_holdout(self.unwrapped.scene.terrain.terrain_types, c.get("wm_holdout_seed", 42))
         self.buffer.window_keys = ("s", "s1", "a", "a_prev", "contact", "cmd", "lags", "timers", "timers1", "depth", "depth1", "done", "terminated")
         self.buffer.start_keys = ("s", "a_prev", "cmd", "lags", "timers", "depth")
         self.buffer.hist_keys = ("s", "a_prev", "cmd")

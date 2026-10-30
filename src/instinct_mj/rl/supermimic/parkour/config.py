@@ -13,6 +13,9 @@ class ParkourSuperMimicRunnerCfg(SuperMimicRunnerCfg):
     The ``style_*`` fields are the ``discriminator_*`` arguments of the task's PPO ``WasabiPPO`` config."""
 
     buffer_steps: int = 800
+    wm_stratified_holdout: bool = False
+    """Opt-in fixed terrain-stratified validation identities; legacy contiguous split otherwise."""
+    wm_holdout_seed: int = 42
     wm_use_privileged_scan: bool = True
     """Legacy direct terrain input; disable to isolate the learned perception latent."""
     wm_diagnostics_interval: int = 0
