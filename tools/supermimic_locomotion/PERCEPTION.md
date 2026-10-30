@@ -67,7 +67,10 @@ Every 1,000 iterations, use the same held-out environment windows and real actio
 to predict 1/8/16/32 steps with intact, shuffled or mean initial perception latent.
 Report physical position/velocity/joint RMSE and contact BCE, valid window counts,
 image reconstruction error versus a mean-image baseline, and latent standard
-deviation. Diagnostics restore CPU/CUDA RNG so they do not alter training draws.
+deviation. Decode predicted future perception and compare its physical MAE with
+the baseline that simply copies the initial image/map. Depth keeps the existing
+convolutional decoder; elevation uses a two-layer MLP decoder to its smaller grid.
+Diagnostics restore CPU/CUDA RNG so they do not alter training draws.
 Shuffled inputs are an intervention, not a new training distribution. Higher
 error after shuffling indicates dependence/usefulness on these windows; it does
 not by itself establish real-world robustness. Raw latent losses from different

@@ -41,6 +41,7 @@ Windows end at real episode resets, using the replay validity mask.
         # A cyclic permutation is a derangement: every sample receives another window's latent.
         zs = {"intact": z0, "shuffled": z0.roll(1, 0), "mean": runner.wm.z_mean.expand_as(z0)}
         out = {}
+        span = 2.0 if runner.perception_term == "height_image" else 2.5
         for mode, latent in zs.items():
             state, z = unflatten_state(w["s"][:, 0]), latent
             for j in range(32):
@@ -57,9 +58,14 @@ Windows end at real episode resets, using the replay validity mask.
                     out[f"{prefix}/{name}"] = float(((squared * mask).sum() / denom).sqrt())
                 bce = F.binary_cross_entropy_with_logits(logits, w["contact"][:, j], reduction="none").mean(-1)
                 out[f"{prefix}/contact_bce"] = float((bce * mask).sum() / denom)
+                target_image = w["depth1"][:, j].float() / 255.0
+                image_error = (runner.latent_dec(z) - target_image).abs().flatten(1).mean(-1) * span
+                out[f"{prefix}/perception_mae_m"] = float((image_error * mask).sum() / denom)
+                if mode == "intact":
+                    copy_error = (depth - target_image).abs().flatten(1).mean(-1) * span
+                    out[f"wm_diag/copy/h{j+1}/perception_mae_m"] = float((copy_error * mask).sum() / denom)
         reconstructed = runner.latent_dec(z0)
         # Both observations are in [0,1]. Height's span is 2 m; depth's span is 2.5 m.
-        span = 2.0 if runner.perception_term == "height_image" else 2.5
         out["wm_diag/reconstruction_mae_m"] = float((reconstructed - depth).abs().mean() * span)
         out["wm_diag/mean_image_mae_m"] = float((depth.mean(0, keepdim=True) - depth).abs().mean() * span)
         out["wm_diag/latent_std"] = float(z0.std(0).mean())
