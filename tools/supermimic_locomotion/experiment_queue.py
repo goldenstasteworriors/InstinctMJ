@@ -67,7 +67,7 @@ def prepare(plan, folder):
     if any(not 0 <= j.get("critic_real_weight", 0.0) <= 1 for j in plan["jobs"]):
         raise ValueError("Invalid real critic weight")
     dependency = plan.get("after_queue")
-    if dependency is not None and (not dependency or Path(dependency).name != dependency or dependency in (".", "..")):
+    if dependency is not None and (not dependency or Path(dependency).name != dependency or dependency in (".", "..", plan["id"])):
         raise ValueError("Dependency must name a queue under the project log root")
     inventory = {}
     selection_root = DATA / plan["id"]
@@ -199,7 +199,14 @@ def work(plan, folder, manifest):
             state.update(status="waiting_for_dependency", dependency=str(dependency), updated_at=now())
             write_json(folder / "state.json", state)
             while True:
-                parent = read_json(dependency) if dependency.exists() else {}
+                try:
+                    parent = read_json(dependency) if dependency.exists() else {}
+                except (OSError, json.JSONDecodeError) as error:
+                    # BOSFS can transiently reject reads of an actively replaced
+                    # status file. Observation failure is not parent failure.
+                    print(f"Dependency observation unavailable; retrying: {error}", flush=True)
+                    time.sleep(30)
+                    continue
                 if parent.get("status") == "completed":
                     break
                 if parent.get("status") == "failed":
