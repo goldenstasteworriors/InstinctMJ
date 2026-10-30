@@ -99,6 +99,7 @@ register_instinct_task(
     env_cfg_factory=lambda: _parkour_amp_env_cfg(play=False, shoe=True, smooth_dont_wait=True),
     play_env_cfg_factory=lambda: _parkour_amp_env_cfg(play=False, shoe=True, smooth_dont_wait=True),
     instinct_rl_cfg_factory=_comparison_ppo,
+    runner_entry_point="instinct_mj.rl.comparison_runner:ComparisonPPORunner",
 )
 
 register_instinct_task(
@@ -106,4 +107,5 @@ register_instinct_task(
     env_cfg_factory=lambda: _perception_env("depth"),
     play_env_cfg_factory=lambda: _perception_env("depth"),
     instinct_rl_cfg_factory=lambda: _comparison_ppo(True),
+    runner_entry_point="instinct_mj.rl.comparison_runner:ComparisonPPORunner",
 )
