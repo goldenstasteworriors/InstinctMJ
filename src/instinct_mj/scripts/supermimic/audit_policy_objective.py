@@ -7,6 +7,7 @@ Reference statistics are from the actual environment AMP FIFO, not raw files.
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -24,10 +25,12 @@ def main():
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--batches", type=int, default=3)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--mc-steps", type=int, default=0,
+                        help="Optional real-policy continuation; compare critic with discounted rewards plus final bootstrap")
     args = parser.parse_args()
     if args.output.exists():
         raise FileExistsError(args.output)
-    if min(args.num_envs, args.batches) < 1:
+    if min(args.num_envs, args.batches) < 1 or args.mc_steps < 0:
         raise ValueError("Positive batch sizes required")
     torch.set_num_threads(8)
     torch.manual_seed(args.seed)
@@ -115,11 +118,55 @@ def main():
             backward_fraction=float((velocity[:, 0] < -.1).float().mean()),
             forward_fraction=float((velocity[:, 0] > .1).float().mean()),
             lateral_fraction=float((velocity[:, 1].abs() > .2).float().mean()))
+    calibration = None
+    if args.mc_steps:
+        with torch.no_grad():
+            reader = runner.reader
+            def value():
+                xi = runner.episode_context(reader.actuator_lags(), runner.fr_n)
+                return runner.critic(runner.critic_input(reader.state(), reader.command_params(), reader.feet_timers(), xi))
+            initial_value = value().clone()
+            alive = torch.ones(args.num_envs, dtype=torch.bool, device=runner.device)
+            censored = torch.zeros_like(alive)
+            observed_return = torch.zeros_like(initial_value)
+            steps = torch.zeros_like(initial_value)
+            obs, policy = runner.obs, runner.get_inference_policy()
+            for step in range(args.mc_steps):
+                obs1, reward, done, infos = vec.step(policy(obs))
+                reward = reward.sum(-1) if reward.dim() > 1 else reward
+                if runner.style is not None:
+                    reward = reward + runner.style.reward(infos["observations"]["amp_policy"])
+                observed_return += agent["gamma"] ** step * alive * reward
+                steps += alive
+                # Timeouts/boundary truncations are not failures. Exclude them
+                # from this calibration rather than assigning a zero tail.
+                censored |= alive & done.bool() & ~env.reset_terminated
+                alive &= ~done.bool()
+                ids = done.nonzero().flatten()
+                if len(ids):
+                    env.reset(env_ids=ids)
+                    reset_obs, _ = vec.get_observations()
+                    obs1 = torch.where(done.bool()[:, None], reset_obs, obs1)
+                obs = obs1
+            tail = agent["gamma"] ** args.mc_steps * alive * value()
+            target = observed_return + tail
+            valid = ~censored
+            calibration = dict(steps=args.mc_steps, final_discount=agent["gamma"] ** args.mc_steps,
+                valid_count=int(valid.sum()), censored_count=int(censored.sum()),
+                mean_predicted=float(initial_value[valid].mean()) if valid.any() else None,
+                mean_real_return_with_tail=float(target[valid].mean()) if valid.any() else None,
+                mean_bootstrap_tail=float(tail[valid].mean()) if valid.any() else None,
+                bias=float((initial_value - target)[valid].mean()) if valid.any() else None,
+                rmse=float((initial_value - target)[valid].square().mean().sqrt()) if valid.any() else None,
+                per_env=dict(predicted=initial_value.tolist(), discounted_rewards=observed_return.tolist(),
+                    bootstrap_tail=tail.tolist(), censored=censored.tolist(), observed_steps=steps.tolist()))
+            print(json.dumps({"critic_calibration": {k: v for k, v in calibration.items() if k != "per_env"}}), flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(protocol=__doc__, checkpoint=str(args.checkpoint), seed=args.seed,
         friction=mu, action_noise=agent["action_noise"], horizon=runner.horizon,
+        reference_selection=os.environ.get("INSTINCT_PARKOUR_SELECTION"), collection_steps=128,
         wm_direct_terrain_scan=agent.get("wm_use_privileged_scan", True),
-        reference_statistics=reference, records=rows), indent=2))
+        reference_statistics=reference, critic_real_continuation=calibration, records=rows), indent=2))
     env.close()
 
 
