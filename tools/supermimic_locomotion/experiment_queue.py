@@ -66,6 +66,9 @@ def prepare(plan, folder):
         raise ValueError("Invalid queue jobs")
     if any(not 0 <= j.get("critic_real_weight", 0.0) <= 1 for j in plan["jobs"]):
         raise ValueError("Invalid real critic weight")
+    if any(not 1 <= j.get("critic_real_steps", 1) <= 800 or
+           not 0 <= j.get("critic_real_recent_steps", 0) <= 800 for j in plan["jobs"]):
+        raise ValueError("Invalid real critic return length or recency")
     dependency = plan.get("after_queue")
     if dependency is not None and (not dependency or Path(dependency).name != dependency or dependency in (".", "..", plan["id"])):
         raise ValueError("Dependency must name a queue under the project log root")
@@ -100,6 +103,12 @@ def prepare(plan, folder):
                           "WM inputs remain state/action, depth latent, privileged terrain scan, delays/friction/previous action. Predicted contacts and analytic termination remain unchanged.",
                           "fail_head=False disables use in imagination, not failure-head fitting. holdout=0 is not held-out validation.",
                           "No scheduled chat notifications. No videos. Latest two checkpoint pairs plus training-proxy best retained."]}
+    if plan.get("task") == "Instinct-Velocity-NoAmp-Depth-SuperMimic-G1-v0":
+        manifest["notes"] = [plan.get("purpose", ""),
+            "Velocity-only task: no motion reference or AMP inputs/rewards. Eight consecutive depth frames; WM direct privileged scan disabled.",
+            "State/action, depth latent, friction/delays and previous action remain WM inputs. Privileged terrain remains in critic/reward calculations.",
+            "Real failure thresholds and timeout/boundary truncations unchanged. Real multi-step returns stop before reset/command changes, bootstrap only nonfailures.",
+            "Recent replay remains off-policy. Pilot results do not establish final training quality."]
     write_json(folder / "manifest.json", manifest)
     write_json(folder / "state.json", {"status": "queued", "created_at": now(), "jobs": [dict(j, status="pending") for j in plan["jobs"]]})
     print(json.dumps({"queue": str(folder), "jobs": ids, "inventory": {k: len(v["files"]) for k, v in inventory.items()}}), flush=True)
@@ -109,7 +118,7 @@ def prepare(plan, folder):
 def training_command(plan, job, run_dir, checkpoint=None):
     flags = job["flags"]
     cmd = [sys.executable, "-u", "-m", "instinct_mj.scripts.supermimic.train_parkour",
-           "--task", TASK, "--num-envs", str(plan["num_envs"]), "--device", "cuda:0", "--log-dir", str(run_dir),
+           "--task", plan.get("task", TASK), "--num-envs", str(plan["num_envs"]), "--device", "cuda:0", "--log-dir", str(run_dir),
            "--agent.seed", str(plan["seed"]), "--agent.run-name", run_dir.name,
            "--agent.max-iterations", str(plan["iterations"]), "--agent.save-interval", "500",
            "--agent.heightmap-cache-dir", os.environ["INSTINCT_HEIGHTMAP_CACHE"],
@@ -119,6 +128,9 @@ def training_command(plan, job, run_dir, checkpoint=None):
            "--agent.style-minibatches", "0" if job["amp"] == "none" else "2"]
     if job.get("critic_real_weight", 0.0):
         cmd += ["--agent.critic-real-weight", str(job["critic_real_weight"])]
+    for key in ("critic_real_steps", "critic_real_recent_steps"):
+        if key in job:
+            cmd += ["--agent." + key.replace("_", "-"), str(job[key])]
     if checkpoint is not None:
         cmd += ["--agent.load-run", str(run_dir), "--agent.load-checkpoint", checkpoint]
     return cmd
@@ -255,7 +267,7 @@ def work(plan, folder, manifest):
                 for seed in plan["eval_seeds"]:
                     output = folder / "evaluations" / f"{job['id']}_seed{seed}.json"
                     if not output.exists():
-                        cmd = [sys.executable, "-u", "-m", "instinct_mj.scripts.supermimic.evaluate_parkour", "--checkpoint", str(target),
+                        cmd = [sys.executable, "-u", "-m", "instinct_mj.scripts.supermimic.evaluate_parkour", "--task", plan.get("task", TASK), "--checkpoint", str(target),
                                "--output", str(output), "--num-envs", str(plan["eval_envs"]), "--seconds", str(plan["eval_seconds"]), "--seed", str(seed)]
                         stage(cmd, env, folder / "logs" / f"{job['id']}_eval{seed}.log", gpu_lock)
                     result = read_json(output)

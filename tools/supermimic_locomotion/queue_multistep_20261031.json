@@ -1,0 +1,19 @@
+{
+  "id": "depth_real_multistep_pilot_20261031",
+  "after_queue": "amp_real_critic_20261031",
+  "task": "Instinct-Velocity-NoAmp-Depth-SuperMimic-G1-v0",
+  "gpu_pool": [1],
+  "max_gpu_used_mb": 2048,
+  "max_gpu_utilization": 35,
+  "iterations": 5000,
+  "num_envs": 1024,
+  "seed": 42,
+  "eval_seeds": [1234, 2345, 3456],
+  "eval_envs": 128,
+  "eval_seconds": 20,
+  "purpose": "Fresh single-factor pilot: real critic 1-step vs 32-step return, both weight 0.5 and recent 48 buffered steps. Corrected friction, no AMP, consecutive depth, geometry auxiliary disabled, unchanged actor/world-model/rewards/termination and three original flags. Three-seed policy evaluation at 5000; review critic calibration and closed-loop errors before extending either run to 20000. Runs serially after current GPU1 job and its evaluations.",
+  "jobs": [
+    {"id": "real1_recent48", "amp": "none", "flags": [true, 0.25, 0.1], "critic_real_weight": 0.5, "critic_real_steps": 1, "critic_real_recent_steps": 48},
+    {"id": "real32_recent48", "amp": "none", "flags": [true, 0.25, 0.1], "critic_real_weight": 0.5, "critic_real_steps": 32, "critic_real_recent_steps": 48}
+  ]
+}
