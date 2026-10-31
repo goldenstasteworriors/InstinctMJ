@@ -1,0 +1,33 @@
+{
+  "id": "amp_temporal_20261031",
+  "after_queue": "depth_stratified_20261031",
+  "task": "Instinct-Parkour-Target-Amp-SuperMimic-G1-v0",
+  "gpu_pool": [
+    2
+  ],
+  "max_gpu_used_mb": 2048,
+  "max_gpu_utilization": 35,
+  "iterations": 20000,
+  "num_envs": 1024,
+  "seed": 42,
+  "eval_seeds": [
+    1234,
+    2345,
+    3456
+  ],
+  "eval_envs": 128,
+  "eval_seconds": 20,
+  "purpose": "Single-factor extra temporal-negative discriminator loss weight0.25 versus corrected AMP baseline. Original batch2048, walk12, coefficient0.25, original losses/WM/rewards/termination; fresh20k1024seed42. Synthetic negatives only from moving reference windows. Natural continuous gait must be verified in simulation video against walking reference; score/survival alone cannot pass.",
+  "jobs": [
+    {
+      "id": "walk_temporal025",
+      "amp": "walk",
+      "flags": [
+        true,
+        0.25,
+        0.1
+      ],
+      "style_temporal_negative_weight": 0.25
+    }
+  ]
+}
