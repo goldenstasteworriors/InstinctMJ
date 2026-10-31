@@ -24,6 +24,12 @@ class ParkourSuperMimicRunnerCfg(SuperMimicRunnerCfg):
     Real targets use task + current AMP reward and bootstrap through truncations,
     but not failures. Actor optimization and world-model training are unchanged.
     """
+    critic_real_steps: int = 1
+    """Maximum real return length; 1 retains the previous one-step target."""
+    critic_real_recent_steps: int = 0
+    """Restrict real starts to this many latest buffered steps; 0 uses all history.
+    Recent replay reduces policy staleness but is still off-policy.
+    """
     """Held-out physical-state prediction tests with intact/shuffled/mean perception."""
     """Replay buffer length in vectorized env steps (default 800; the depth stacks dominate the memory)."""
     keep_latest_checkpoints: int = 2

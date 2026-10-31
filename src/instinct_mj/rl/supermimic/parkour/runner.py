@@ -63,6 +63,10 @@ class ParkourSuperMimicRunner:
             raise ValueError("critic_real_weight must be in [0, 1]")
         if c.get("critic_real_weight", 0.0) and c["no_critic"]:
             raise ValueError("Real critic fitting requires an enabled critic")
+        if not 1 <= c.get("critic_real_steps", 1) <= c["buffer_steps"]:
+            raise ValueError("critic_real_steps must be in [1, buffer_steps]")
+        if c.get("critic_real_recent_steps", 0) < 0:
+            raise ValueError("critic_real_recent_steps must be nonnegative")
         self.critic_real_metrics = {}
         self.unwrapped = env.unwrapped
         policy_cfg = c["policy"]
@@ -460,6 +464,8 @@ class ParkourSuperMimicRunner:
         Reference exhaustion does not reset the physical environment. Restrict to
         training environments; held-out WM data are not used for this extra fit.
         """
+        if self.cfg.get("critic_real_steps", 1) > 1 or self.cfg.get("critic_real_recent_steps", 0):
+            return self.real_multistep_critic_batch(batch_size)
         buf, mdp = self.buffer, self.mdp
         eligible = buf.eligible_starts(lambda t: t > mdp.dt, env_range=buf.train_envs, key="time_left")
         eligible = eligible[eligible[:, 0] >= AMP_HIST - 1]
@@ -489,7 +495,77 @@ class ParkourSuperMimicRunner:
             "critic/real_truncation_fraction": float((get("done") & ~get("terminated")).float().mean()),
             "critic/real_reward_mean": float(reward.mean()),
         }
-        return X, X1, reward, continuation
+        return X, X1, reward, self.cfg["gamma"] * continuation
+
+    @torch.no_grad()
+    def real_multistep_critic_batch(self, batch_size):
+        """Recent real n-step returns, stopping at the first episode/command boundary.
+
+        Keep the failure transition and zero its bootstrap. At timeouts, terrain
+        boundaries, command changes, or the end of available replay, bootstrap
+        from the last pre-reset successor. Never concatenate rewards across a
+        reset or command change. Short windows are retained, avoiding a survivor
+        bias from requiring n uninterrupted transitions. AMP uses the current
+        discriminator on native state histories, as in one-step real fitting.
+        """
+        buf, mdp, c = self.buffer, self.mdp, self.cfg
+        eligible = buf.eligible_starts(lambda t: t > mdp.dt, env_range=buf.train_envs, key="time_left")
+        minimum = AMP_HIST - 1
+        if c.get("critic_real_recent_steps", 0):
+            minimum = max(minimum, buf.size - c["critic_real_recent_steps"])
+        eligible = eligible[eligible[:, 0] >= minimum]
+        if len(eligible):
+            eligible = eligible[buf.data["ep_step"][buf._row(eligible[:, 0]), eligible[:, 1]] >= AMP_HIST - 1]
+        if not len(eligible):
+            raise RuntimeError("No eligible recent real critic starts")
+        pick = eligible[torch.randint(len(eligible), (batch_size,), device=self.device)]
+        age, env = pick[:, 0], pick[:, 1]
+        _, history = buf.starts_at(age, env, AMP_HIST)
+        frames = mdp.amp_frame(unflatten_state(history["s"])) if self.style is not None else None
+        get = lambda key, ages: buf.data[key][buf._row(ages), env]
+        cmd = get("cmd", age)
+        xi = self.episode_context(get("lags", age), self.fr_n[env])
+        X = self.critic_input(unflatten_state(get("s", age)), cmd, get("timers", age), xi)
+        Xlast = X.clone()
+        reward = torch.zeros(batch_size, device=self.device)
+        discount = torch.ones_like(reward)
+        active = torch.ones(batch_size, dtype=torch.bool, device=self.device)
+        lengths = torch.zeros_like(reward)
+        failures, truncations = torch.zeros_like(active), torch.zeros_like(active)
+        previous_ep = get("ep_step", age)
+        for step in range(c.get("critic_real_steps", 1)):
+            ages = (age + step).clamp(max=buf.size - 1)
+            ep = get("ep_step", ages)
+            active &= (age + step < buf.size) & (get("time_left", ages) > mdp.dt)
+            active &= (get("cmd", ages) == cmd).all(-1)
+            if step:
+                active &= ep == previous_ep + 1
+            if not active.any():
+                break
+            S1 = unflatten_state(get("s1", ages))
+            r = get("r", ages).clone()
+            if frames is not None:
+                frames = torch.cat((frames[:, 1:], mdp.amp_frame(S1).unsqueeze(1)), 1)
+                r += self.style.reward(mdp.amp_window(frames))
+            term, done = get("terminated", ages), get("done", ages)
+            successor = self.critic_input(S1, cmd, get("timers1", ages), xi)
+            reward += torch.where(active, discount * r, 0)
+            discount = torch.where(active, discount * c["gamma"] * (~term), discount)
+            Xlast = torch.where(active[:, None], successor, Xlast)
+            lengths += active
+            failures |= active & term
+            truncations |= active & done & ~term
+            active &= ~done
+            previous_ep = ep
+        self.critic_real_metrics = {
+            "critic/real_eligible_transitions": float(len(eligible)),
+            "critic/real_failure_fraction": float(failures.float().mean()),
+            "critic/real_truncation_fraction": float(truncations.float().mean()),
+            "critic/real_reward_mean": float(reward.mean()),
+            "critic/real_return_steps_mean": float(lengths.mean()),
+            "critic/real_bootstrap_discount_mean": float(discount.mean()),
+        }
+        return X, Xlast, reward, discount
 
     def policy_update(self):
         """H-step imagination from buffered states, BPTT of the discounted return (task + style reward), GAE critic fit."""
@@ -549,7 +625,7 @@ class ParkourSuperMimicRunner:
                 self.critic.norm.update(torch.cat((RX, RX1), 0))
             with torch.no_grad():
                 if real_weight:
-                    real_target = real_reward + c["gamma"] * real_continue * self.critic(RX1)
+                    real_target = real_reward + real_continue * self.critic(RX1)
                     self.critic_real_metrics["critic/real_td_rmse_before_fit"] = float(
                         (self.critic(RX) - real_target).square().mean().sqrt())
                 V = self.critic(X)
