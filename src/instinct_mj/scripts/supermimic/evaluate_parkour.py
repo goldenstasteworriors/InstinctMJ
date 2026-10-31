@@ -45,11 +45,14 @@ def main() -> None:
     parser.add_argument("--video", type=Path, help="Optional four-view MP4; first episodes freeze at termination.")
     parser.add_argument("--video-envs", nargs=4, type=int, default=[0, 32, 64, 96])
     parser.add_argument("--video-label", default="SuperMimic locomotion")
+    parser.add_argument("--trajectory", type=Path, help="Optional NPZ of post-step, pre-reset gait data; valid mask includes first failure.")
     args = parser.parse_args()
     if args.num_envs < 2 or args.seconds <= 0:
         raise ValueError("Evaluation requires at least two environments and positive seconds")
     if args.output.exists() or (args.video is not None and args.video.exists()):
         raise FileExistsError("Refusing to overwrite an existing evaluation artifact")
+    if args.trajectory is not None and (args.trajectory.suffix != ".npz" or args.trajectory.exists()):
+        raise ValueError("Trajectory must be a new .npz file")
     if args.forward_speed <= 0 or (args.initial_terrain_level is not None and args.initial_terrain_level < 0):
         raise ValueError("Invalid forward speed or terrain level")
     if args.friction_coefficient is not None and args.friction_coefficient <= 0:
@@ -128,6 +131,7 @@ def main() -> None:
     initial_overflow = env.sim.data.overflow.to(dtype=torch.int64)
     hfield_first_step[(initial_overflow & int(OverflowType.HFIELD)) != 0] = 0
     video = None
+    trajectory = {} if args.trajectory is not None else None
     if args.video is not None:
         from instinct_mj.scripts.supermimic.parkour_video import ParkourVideo
 
@@ -151,7 +155,7 @@ def main() -> None:
         done = dones.bool()
         hfield_hit = (env.sim.data.overflow.to(dtype=torch.int64) & int(OverflowType.HFIELD)) != 0
         hfield_first_step[active & hfield_hit & (hfield_first_step < 0)] = step
-        p, R, v, w, _, _ = reader.state()
+        p, R, v, w, q, qd = reader.state()
         if not all(torch.isfinite(x[active]).all() for x in (p, R, v, w, reward)):
             raise FloatingPointError("Nonfinite evaluation state or reward")
         vb = (R.transpose(-1, -2) @ v.unsqueeze(-1)).squeeze(-1)
@@ -178,6 +182,18 @@ def main() -> None:
         travel += (p[:, :2] - before[:, :2]).norm(dim=-1) * active
         end_pos[active] = p[active]
         contact = reader.contact()
+        if trajectory is not None:
+            # Snapshot before any reset. Later episodes remain in arrays but are
+            # excluded by valid; the first terminal transition is valid.
+            sample = {"valid": active, "done": done, "terminated": env.reset_terminated,
+                      "position_world": p, "rotation_body_to_world": R,
+                      "linear_velocity_world": v, "angular_velocity_world": w,
+                      "joint_position": q, "joint_velocity": qd, "action": action,
+                      "velocity_command_body": command, "contact_indicator": contact,
+                      "feet_force_history_world": reader.feet_sensor.data.force_history,
+                      "feet_timers": reader.feet_timers(), "hfield_overflow": hfield_hit}
+            for key, value in sample.items():
+                trajectory.setdefault(key, []).append(value.detach().cpu().clone().numpy())
         feet = contact[:, :2] > 0.5
         contact_sum += (contact * active[:, None]).sum(0)
         flight += (~feet.any(-1)) * active
@@ -242,6 +258,25 @@ def main() -> None:
     summary["moving_command_fraction"] = float(command_nonzero.sum() / steps.sum())
     summary["stationary_given_moving_command"] = float(commanded_motion_stationary.sum() / command_nonzero.sum()) if command_nonzero.sum() else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    if trajectory is not None:
+        import numpy as np
+
+        args.trajectory.parent.mkdir(parents=True, exist_ok=True)
+        arrays = {key: np.stack(values) for key, values in trajectory.items()}
+        arrays["time_s"] = np.arange(1, len(trajectory["valid"]) + 1) * env.step_dt
+        arrays["joint_names"] = np.asarray(reader.robot.joint_names)
+        arrays["metadata_json"] = np.asarray(json.dumps({
+            "checkpoint": str(args.checkpoint), "seed": args.seed, "dt": env.step_dt,
+            "alignment": "Post-step, pre-reset; valid includes first failure and excludes all subsequent episodes",
+            "feet_order": ["left", "right"], "feet_timer_order": ["air_left", "air_right", "contact_left", "contact_right"],
+            "force_note": "Native sensor force history, not instantaneous force; contact_indicator uses history maximum",
+            "position_note": "Root position is world frame; foot positions are not exported",
+            "terrain_probe": args.terrain_probe, "command_mode": args.command_mode,
+        }))
+        # Exclusive creation also prevents accidental overwrite between checks.
+        with args.trajectory.open("xb") as stream:
+            np.savez_compressed(stream, **arrays)
+        summary["trajectory"] = str(args.trajectory)
     args.output.write_text(json.dumps({**summary, "records": records}, indent=2))
     print(json.dumps(summary), flush=True)
     if video is not None:
