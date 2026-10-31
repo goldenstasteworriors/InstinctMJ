@@ -167,6 +167,10 @@ class ParkourSuperMimicRunner:
             c["style_reward_coef"], c["style_reward_type"], c["style_loss_func"], 1.0, c["style_gradient_penalty_coef"],
             c["style_weight_decay_coef"], c["style_logit_weight_decay_coef"],
         ) if c["style_reward_coef"] != 0 else None  # fmt: skip
+        temporal_weight = c.get("style_temporal_negative_weight", 0.0)
+        if temporal_weight < 0 or (temporal_weight and (self.style is None or c["style_loss_func"] != "MSELoss")):
+            raise ValueError("Temporal negatives require AMP MSE loss and nonnegative weight")
+        self.style_temporal_metrics = {}
         if self.style is None and c["style_minibatches"] != 0:
             raise ValueError("No-AMP requires style_minibatches=0")
         self.err_floor = ERR_FLOOR.to(device)
@@ -421,7 +425,14 @@ class ParkourSuperMimicRunner:
                 policy_windows = self.mdp.amp_window(self.mdp.amp_frame(unflatten_state(h["s"])))
             rows = (self.amp_ref_ptr - 1 - torch.randint(0, self.amp_ref_size, (B,), device=self.device)) % self.amp_ref.shape[0]
             reference_windows = self.amp_ref[rows, torch.randint(0, self.N, (B,), device=self.device)].float()
-            out = self.style.update(policy_windows, reference_windows)
+            weight = c.get("style_temporal_negative_weight", 0.0)
+            negatives = None
+            if weight:
+                from .temporal_style import moving_reference_negatives
+                negatives = moving_reference_negatives(reference_windows)
+            out = self.style.update(policy_windows, reference_windows, negatives, weight)
+            self.style_temporal_metrics = {"style/" + k: float(out[k]) for k in (
+                "temporal_negative_loss", "temporal_negative_score", "temporal_negative_count")}
         return out
 
     def sample_valid_starts(self, B: int):
@@ -739,6 +750,7 @@ class ParkourSuperMimicRunner:
                     row.update(perception_diagnostics(self))
                 self.latest_metrics = row
                 row.update(self.critic_real_metrics)
+                row.update(self.style_temporal_metrics)
                 if self.log_dir is not None:
                     Path(self.log_dir, "status.json").write_text(json.dumps({
                         "iteration": self.it, "metrics": {k: v if math.isfinite(v) else None for k, v in row.items()}

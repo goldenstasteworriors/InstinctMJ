@@ -68,6 +68,9 @@ def prepare(plan, folder):
         raise ValueError("Invalid real critic weight")
     if any("style_batch" in j and (type(j["style_batch"]) is not int or j["style_batch"] < 1 or j["amp"] == "none") for j in plan["jobs"]):
         raise ValueError("Style batch requires a positive integer and AMP enabled")
+    if any(not 0 <= j.get("style_temporal_negative_weight", 0.0) <= 1 or
+           (j.get("style_temporal_negative_weight", 0.0) and j["amp"] == "none") for j in plan["jobs"]):
+        raise ValueError("Temporal negative weight must be in [0,1] with AMP enabled")
     if any(not 1 <= j.get("critic_real_steps", 1) <= 800 or
            not 0 <= j.get("critic_real_recent_steps", 0) <= 800 for j in plan["jobs"]):
         raise ValueError("Invalid real critic return length or recency")
@@ -111,6 +114,8 @@ def prepare(plan, folder):
             "State/action, depth latent, friction/delays and previous action remain WM inputs. Privileged terrain remains in critic/reward calculations.",
             "Real failure thresholds and timeout/boundary truncations unchanged. Real multi-step returns stop before reset/command changes, bootstrap only nonfailures.",
             "Recent replay remains off-policy. Pilot results do not establish final training quality."]
+    if any(j.get("style_temporal_negative_weight", 0) for j in plan["jobs"]):
+        manifest["notes"].append("Extra synthetic frozen/permuted moving-reference negatives affect only discriminator fitting. Original real-policy negatives/reference positives, reward formula, WM inputs and termination unchanged; video gait acceptance required.")
     write_json(folder / "manifest.json", manifest)
     write_json(folder / "state.json", {"status": "queued", "created_at": now(), "jobs": [dict(j, status="pending") for j in plan["jobs"]]})
     print(json.dumps({"queue": str(folder), "jobs": ids, "inventory": {k: len(v["files"]) for k, v in inventory.items()}}), flush=True)
@@ -130,7 +135,7 @@ def training_command(plan, job, run_dir, checkpoint=None):
            "--agent.style-minibatches", "0" if job["amp"] == "none" else "2"]
     if job.get("critic_real_weight", 0.0):
         cmd += ["--agent.critic-real-weight", str(job["critic_real_weight"])]
-    for key in ("critic_real_steps", "critic_real_recent_steps", "style_batch"):
+    for key in ("critic_real_steps", "critic_real_recent_steps", "style_batch", "style_temporal_negative_weight"):
         if key in job:
             cmd += ["--agent." + key.replace("_", "-"), str(job[key])]
     if checkpoint is not None:

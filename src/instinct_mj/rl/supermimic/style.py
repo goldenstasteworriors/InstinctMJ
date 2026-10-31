@@ -54,7 +54,8 @@ class StyleReward:
             raise NotImplementedError(f"discriminator reward type {self.reward_type}")
         return self.reward_coef * reward
 
-    def update(self, policy_windows: torch.Tensor, reference_windows: torch.Tensor) -> dict[str, torch.Tensor]:
+    def update(self, policy_windows: torch.Tensor, reference_windows: torch.Tensor,
+               temporal_negatives: torch.Tensor | None = None, temporal_weight: float = 0.0) -> dict[str, torch.Tensor]:
         """One discriminator step on a minibatch of policy and reference windows (the losses of
         ``WasabiAlgoMixin.compute_amp_losses``). Returns the losses and statistics (detached)."""
         policy_d = self.discriminator(policy_windows)
@@ -70,6 +71,16 @@ class StyleReward:
         else:
             raise NotImplementedError(f"discriminator loss function {self.loss_func}")
         discriminator_loss = 0.5 * (policy_loss + reference_loss)
+        if temporal_weight < 0 or (temporal_weight and self.loss_func != "MSELoss"):
+            raise ValueError("Temporal negatives require nonnegative weight and MSELoss")
+        temporal_loss = policy_d.new_zeros(())
+        temporal_score = policy_d.new_zeros(())
+        temporal_count = 0
+        if temporal_weight and temporal_negatives is not None and len(temporal_negatives):
+            negative_d = self.discriminator(temporal_negatives.detach())
+            temporal_loss = torch.nn.functional.mse_loss(negative_d, -torch.ones_like(negative_d))
+            temporal_score = negative_d.mean().detach()
+            temporal_count = len(temporal_negatives)
         # gradient penalty w.r.t. the inputs (policy and reference windows), as ``compute_discriminator_gradient``
         gradient_penalty = torch.zeros((), device=policy_windows.device)
         if self.gradient_penalty_coef > 0:
@@ -89,6 +100,7 @@ class StyleReward:
             + self.gradient_penalty_coef * gradient_penalty
             + self.weight_decay_coef * weight_decay
             + 1.0 * logit_weight_decay
+            + temporal_weight * temporal_loss
         )
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -96,6 +108,8 @@ class StyleReward:
         return {
             "discriminator_loss": discriminator_loss.detach(), "gradient_penalty": gradient_penalty.detach(),
             "discriminator_policy": policy_d.detach().mean(), "discriminator_reference": reference_d.detach().mean(),
+            "temporal_negative_loss": temporal_loss.detach(), "temporal_negative_score": temporal_score,
+            "temporal_negative_count": policy_d.new_tensor(temporal_count),
         }  # fmt: skip
 
     def state_dict(self) -> dict:

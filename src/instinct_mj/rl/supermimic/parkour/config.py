@@ -56,6 +56,8 @@ class ParkourSuperMimicRunnerCfg(SuperMimicRunnerCfg):
     """AdamW kwargs of the discriminator (``discriminator_optimizer_kwargs``)."""
     style_batch: int = 2048
     """Policy / reference windows per discriminator minibatch (default 2048)."""
+    style_temporal_negative_weight: float = 0.0
+    """Extra MSE loss on frozen/permuted moving references; zero preserves original AMP."""
     style_minibatches: int = 2
     """Discriminator minibatches per iteration (default 2)."""
     style_recent_steps: int = 48
