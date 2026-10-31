@@ -1,0 +1,33 @@
+{
+  "id": "amp_batch_20261031",
+  "after_queue": "depth_real_multistep_pilot_20261031",
+  "task": "Instinct-Parkour-Target-Amp-SuperMimic-G1-v0",
+  "gpu_pool": [
+    1
+  ],
+  "max_gpu_used_mb": 2048,
+  "max_gpu_utilization": 35,
+  "iterations": 20000,
+  "num_envs": 1024,
+  "seed": 42,
+  "eval_seeds": [
+    1234,
+    2345,
+    3456
+  ],
+  "eval_envs": 128,
+  "eval_seconds": 20,
+  "purpose": "Single-factor discriminator batch6144 versus corrected-friction AMP baseline batch2048. Same walk12, reward coefficient0.25, 2 discriminator updates, recent48, referenceFIFO100, critic_real_weight0, original flags, actor/WM and termination. Fresh20k; compare real gait and real/model calibration, not style score alone.",
+  "jobs": [
+    {
+      "id": "walk_batch6144",
+      "amp": "walk",
+      "flags": [
+        true,
+        0.25,
+        0.1
+      ],
+      "style_batch": 6144
+    }
+  ]
+}

@@ -66,6 +66,8 @@ def prepare(plan, folder):
         raise ValueError("Invalid queue jobs")
     if any(not 0 <= j.get("critic_real_weight", 0.0) <= 1 for j in plan["jobs"]):
         raise ValueError("Invalid real critic weight")
+    if any("style_batch" in j and (type(j["style_batch"]) is not int or j["style_batch"] < 1 or j["amp"] == "none") for j in plan["jobs"]):
+        raise ValueError("Style batch requires a positive integer and AMP enabled")
     if any(not 1 <= j.get("critic_real_steps", 1) <= 800 or
            not 0 <= j.get("critic_real_recent_steps", 0) <= 800 for j in plan["jobs"]):
         raise ValueError("Invalid real critic return length or recency")
@@ -128,7 +130,7 @@ def training_command(plan, job, run_dir, checkpoint=None):
            "--agent.style-minibatches", "0" if job["amp"] == "none" else "2"]
     if job.get("critic_real_weight", 0.0):
         cmd += ["--agent.critic-real-weight", str(job["critic_real_weight"])]
-    for key in ("critic_real_steps", "critic_real_recent_steps"):
+    for key in ("critic_real_steps", "critic_real_recent_steps", "style_batch"):
         if key in job:
             cmd += ["--agent." + key.replace("_", "-"), str(job[key])]
     if checkpoint is not None:
