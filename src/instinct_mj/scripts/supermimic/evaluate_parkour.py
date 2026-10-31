@@ -259,6 +259,7 @@ def main() -> None:
     summary["stationary_given_moving_command"] = float(commanded_motion_stationary.sum() / command_nonzero.sum()) if command_nonzero.sum() else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if trajectory is not None:
+        import io
         import numpy as np
 
         args.trajectory.parent.mkdir(parents=True, exist_ok=True)
@@ -273,9 +274,13 @@ def main() -> None:
             "position_note": "Root position is world frame; foot positions are not exported",
             "terrain_probe": args.terrain_probe, "command_mode": args.command_mode,
         }))
+        # Object-backed workspace mounts may reject ZIP header seeks. Build the
+        # archive in memory, then perform one sequential write on that mount.
+        archive = io.BytesIO()
+        np.savez_compressed(archive, **arrays)
         # Exclusive creation also prevents accidental overwrite between checks.
         with args.trajectory.open("xb") as stream:
-            np.savez_compressed(stream, **arrays)
+            stream.write(archive.getbuffer())
         summary["trajectory"] = str(args.trajectory)
     args.output.write_text(json.dumps({**summary, "records": records}, indent=2))
     print(json.dumps(summary), flush=True)
